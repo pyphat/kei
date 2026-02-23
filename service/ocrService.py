@@ -13,7 +13,6 @@ class OcrService:
         self.y = y
         self.endX = endX
         self.endY = endY
-        self.model = globals.mangaOcr
 
     def crop(self):
         image = Image.open(self.image_url)
@@ -21,7 +20,7 @@ class OcrService:
         return image.crop(crop_area)
 
     def run(self):
-        return self.model(self.crop())
+        return globals.scan_image(self.crop())
 
 
 if __name__ == "__main__":
