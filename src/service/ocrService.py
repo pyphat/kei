@@ -16,11 +16,16 @@ class OcrService:
 
     def crop(self):
         image = Image.open(self.image_url)
-        crop_area = (self.x, self.y, self.endX, self.endY)
+        crop_area = (
+            min(self.x, self.endX),
+            min(self.y, self.endY),
+            max(self.endX, self.x),
+            max(self.y, self.endY),
+        )
         return image.crop(crop_area)
 
     def run(self):
-        return globals.scan_image(self.crop())
+        return globals.scan(self.crop())
 
 
 if __name__ == "__main__":

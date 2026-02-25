@@ -1,10 +1,10 @@
 import os
 import tkinter as tk
 
-from manga_ocr import MangaOcr
 from PIL import Image, ImageTk
 
 from service.ocrService import OcrService
+from service.translateService import TranslateService
 
 
 class ImageViewer:
@@ -15,8 +15,10 @@ class ImageViewer:
         self.image_paths = [os.path.join("test", f"{i:03}.jpg") for i in range(2, 26)]
 
         self.index = 0
-        self.start_x = None
-        self.start_y = None
+        self.start_x: int = 0
+        self.start_y: int = 0
+        self.end_x: int = 0
+        self.end_y: int = 0
         self.rect = None
 
         # -------------------
@@ -75,8 +77,10 @@ class ImageViewer:
         self.page_label.config(text=f"Page:\n{self.index + 1} / {total}")
 
         self.rect = None
-        self.start_x = None
-        self.start_y = None
+        self.start_x = 0
+        self.start_y = 0
+        self.end_x = 0
+        self.end_y = 0
 
     # -------------------
     # Drawing logic
@@ -105,7 +109,7 @@ class ImageViewer:
         if self.rect:
             self.canvas.delete(self.rect)
             self.rect = None
-        service = OcrService(
+        ocr_service = OcrService(
             self.start_x,
             self.start_y,
             self.end_x,
@@ -113,11 +117,12 @@ class ImageViewer:
             self.image_paths[self.index],
             False,
         )
-        self.page_label.config(text=service.run())
-        self.start_x = None
-        self.start_y = None
-        self.end_x = None
-        self.end_y = None
+        translate = TranslateService(ocr_service.run(), False)
+        self.page_label.config(text=translate.run())
+        self.start_x = 0
+        self.start_y = 0
+        self.end_x = 0
+        self.end_y = 0
 
     # -------------------
     # Navigation
@@ -135,6 +140,7 @@ class ImageViewer:
 
 
 if __name__ == "__main__":
+    print("[DEBUG] Started the program.")
     root = tk.Tk()
     app = ImageViewer(root)
     root.mainloop()
