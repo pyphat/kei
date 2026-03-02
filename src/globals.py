@@ -4,7 +4,8 @@ from manga_ocr import MangaOcr
 print("initializing manga-ocr")
 mangaOcr = MangaOcr()
 print("initializing gemini client")
-client = genai.Client(api_key="AIzaSyAzZ91REFKB1nLrDm0MMa8UFT9hy1IHe8I")
+API_KEY = "..."
+client = genai.Client(api_key=API_KEY)
 
 
 # Manga OCR Scan
