@@ -1,2 +1,1 @@
-# kei
-CEDT Hackathon - Manga Translator
+# 慧
