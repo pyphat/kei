@@ -6,5 +6,5 @@ class TranslateService:
         self.japanese_text = japanese_text
         self.threaded = threaded
 
-    def run(self):
+    def run(self) -> str:
         return globals.translate(self.japanese_text)

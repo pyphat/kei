@@ -1,139 +1,218 @@
 import os
+import threading
 import tkinter as tk
 
 from PIL import Image, ImageTk
 
-from service.ocrService import OcrService
-from service.translateService import TranslateService
+import globals as g
+from objects.mangaPage import MangaPage
 
 
 class ImageViewer:
     def __init__(self, root):
+
         self.root = root
         self.root.title("manga-01")
 
         self.image_paths = [os.path.join("test", f"{i:03}.jpg") for i in range(2, 26)]
 
         self.index = 0
-        self.start_x: int = 0
-        self.start_y: int = 0
-        self.end_x: int = 0
-        self.end_y: int = 0
-        self.rect = None
+        self.page = None
+
+        # cache
+        self.page_cache = {}
+
+        # background prefetch thread
+        self.prefetch_thread = None
+
+        self.hover_rect = None
+        self.hovered_bubble = None
 
         # -------------------
-        # Layout Setup
+        # Layout
         # -------------------
 
         main_frame = tk.Frame(root)
         main_frame.pack(fill="both", expand=True)
 
-        # Canvas (left side)
         self.canvas = tk.Canvas(main_frame, cursor="cross")
         self.canvas.pack(side="left")
 
-        # Right panel
         right_panel = tk.Frame(main_frame, width=150, bg="#eeeeee")
         right_panel.pack(side="right", fill="y")
 
         self.page_label = tk.Label(
             right_panel, text="", font=("Arial", 14), bg="#eeeeee"
         )
+
         self.page_label.pack(pady=20)
 
-        # Navigation buttons (bottom)
         button_frame = tk.Frame(root)
         button_frame.pack()
 
         tk.Button(button_frame, text="Previous", command=self.show_prev).pack(
             side=tk.LEFT, padx=5
         )
+
         tk.Button(button_frame, text="Next", command=self.show_next).pack(
             side=tk.LEFT, padx=5
         )
 
-        # Mouse bindings
-        self.canvas.bind("<ButtonPress-1>", self.on_press)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        # mouse events
+        self.canvas.bind("<Motion>", self.on_hover)
+        self.canvas.bind("<Button-1>", self.on_click)
 
         self.load_image()
+
+        # start background prefetch
+        self.start_prefetch()
 
     # -------------------
     # Load Image
     # -------------------
 
     def load_image(self):
+
         path = self.image_paths[self.index]
+
         self.image = Image.open(path)
         self.photo = ImageTk.PhotoImage(self.image)
 
         self.canvas.config(width=self.photo.width(), height=self.photo.height())
         self.canvas.delete("all")
+
         self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
 
-        # Update page label
         total = len(self.image_paths)
+
+        self.page_label.config(text=f"Loading...\n{self.index + 1} / {total}")
+
+        self.hover_rect = None
+        self.hovered_bubble = None
+
+        # use cache if available
+        if path in self.page_cache:
+            self.page = self.page_cache[path]
+
+            print("Loaded from cache:", path)
+
+            self.page_label.config(text=f"Page:\n{self.index + 1} / {total}")
+
+        else:
+            threading.Thread(
+                target=self._load_page_background,
+                args=(path,),
+                daemon=True,
+            ).start()
+
+    # -------------------
+    # Background page load
+    # -------------------
+
+    def _load_page_background(self, path):
+
+        page = MangaPage(path)
+
+        self.page_cache[path] = page
+
+        print("Detected bubbles:", len(page.get_bubbles()), "for", path)
+
+        if self.image_paths[self.index] == path:
+            self.root.after(0, self._finish_page_load, page)
+
+    def _finish_page_load(self, page):
+
+        self.page = page
+
+        total = len(self.image_paths)
+
         self.page_label.config(text=f"Page:\n{self.index + 1} / {total}")
 
-        self.rect = None
-        self.start_x = 0
-        self.start_y = 0
-        self.end_x = 0
-        self.end_y = 0
-
     # -------------------
-    # Drawing logic
+    # Prefetch entire chapter
     # -------------------
 
-    def on_press(self, event):
-        self.start_x = event.x
-        self.start_y = event.y
-        self.rect = None
+    def start_prefetch(self):
 
-    def on_drag(self, event):
-        if self.start_x is None or self.start_y is None:
+        if self.prefetch_thread:
             return
 
-        if self.rect:
-            self.canvas.delete(self.rect)
-
-        self.rect = self.canvas.create_rectangle(
-            self.start_x, self.start_y, event.x, event.y, outline="red", width=2
+        self.prefetch_thread = threading.Thread(
+            target=self._prefetch_all_pages,
+            daemon=True,
         )
 
-        self.end_x = event.x
-        self.end_y = event.y
+        self.prefetch_thread.start()
 
-    def on_release(self, event):
-        if self.rect:
-            self.canvas.delete(self.rect)
-            self.rect = None
-        ocr_service = OcrService(
-            self.start_x,
-            self.start_y,
-            self.end_x,
-            self.end_y,
-            self.image_paths[self.index],
-            False,
-        )
-        translate = TranslateService(ocr_service.run(), False)
-        self.page_label.config(text=translate.run())
-        self.start_x = 0
-        self.start_y = 0
-        self.end_x = 0
-        self.end_y = 0
+    def _prefetch_all_pages(self):
+
+        print("Starting full chapter prefetch...")
+
+        for path in self.image_paths:
+            if path in self.page_cache:
+                continue
+
+            print("Prefetching:", path)
+
+            page = MangaPage(path)
+
+            self.page_cache[path] = page
+
+        print("Prefetch complete.")
+
+    # -------------------
+    # Hover highlight
+    # -------------------
+
+    def on_hover(self, event):
+
+        if not self.page:
+            return
+
+        bubble = self.page.find_bubble(event.x, event.y)
+
+        if bubble == self.hovered_bubble:
+            return
+
+        if self.hover_rect:
+            self.canvas.delete(self.hover_rect)
+            self.hover_rect = None
+
+        self.hovered_bubble = bubble
+
+        if bubble:
+            det = bubble["bbox"]
+
+            self.hover_rect = self.canvas.create_rectangle(
+                det["x1"], det["y1"], det["x2"], det["y2"], outline="green", width=2
+            )
+
+    # -------------------
+    # Click translate
+    # -------------------
+
+    def on_click(self, event):
+
+        if not self.page:
+            return
+
+        bubble = self.page.find_bubble(event.x, event.y)
+
+        if bubble:
+            self.page_label.config(text=bubble["text"])
 
     # -------------------
     # Navigation
     # -------------------
 
     def show_next(self):
+
         if self.index < len(self.image_paths) - 1:
             self.index += 1
             self.load_image()
 
     def show_prev(self):
+
         if self.index > 0:
             self.index -= 1
             self.load_image()
@@ -143,4 +222,6 @@ if __name__ == "__main__":
     print("[DEBUG] Started the program.")
     root = tk.Tk()
     app = ImageViewer(root)
+    root.after(100, g.warm_up)  # start model loading later
+    root.after(500, app.load_image)
     root.mainloop()
