@@ -11,10 +11,6 @@ import globals as g
 from objects.mangaPage import MangaPage
 from welcomePage import WelcomePage
 
-# -------------------
-# NLP Initialization
-# -------------------
-
 print("[DEBUG] Initializing MeCab (fugashi)")
 tagger = Tagger()
 
@@ -28,12 +24,13 @@ class ImageViewer:
         self.root = root
         self.root.title("manga-01")
         self.root.attributes("-fullscreen", True)
+
         self.root.bind("<Escape>", lambda e: self.root.attributes("-fullscreen", False))
         self.root.bind("<F11>", lambda e: self.root.attributes("-fullscreen", True))
 
-        # Build image list from the selected folder
         image_exts = (".jpg", ".jpeg", ".png", ".webp")
         all_files = sorted(os.listdir(folder))
+
         self.image_paths = [
             os.path.join(folder, f) for f in all_files if f.lower().endswith(image_exts)
         ]
@@ -43,10 +40,7 @@ class ImageViewer:
         self.image = None
         self.image_scale = 1.0
 
-        # cache
         self.page_cache = {}
-
-        # background prefetch thread
         self.prefetch_thread = None
 
         self.hover_rect = None
@@ -64,61 +58,81 @@ class ImageViewer:
         self.canvas.bind("<Configure>", self._on_canvas_resize)
 
         right_panel = tk.Frame(main_frame, bg="#eeeeee")
-        right_panel.pack(side="left", fill="both", expand=True)
+        right_panel.pack(side="left", fill="both", expand=True, padx=40, pady=40)
 
         self.page_label = tk.Label(
             right_panel, text="", font=("Shippori Antique", 28), bg="#eeeeee"
         )
+        self.page_label.pack(pady=(20, 4), fill="x")
 
         self.ocr_text = tk.Label(
             right_panel,
             text="",
-            font=("Shippori Antique", 18),
+            font=("Shippori Antique", 36),
             bg="#eeeeee",
             wraplength=0,
             justify="left",
         )
+        self.ocr_text.pack(pady=(0, 10), fill="x")
 
         right_panel.bind(
             "<Configure>",
             lambda e: self.ocr_text.config(wraplength=e.width - 20),
         )
 
-        self.words = tk.Text(
-            right_panel,
-            font=("Arial", 14),
-            bg="#eeeeee",
-            wrap="word",
-            borderwidth=0,
+        # -------------------
+        # Scrollable dictionary cards
+        # -------------------
+
+        words_container = tk.Frame(right_panel, bg="#eeeeee")
+        words_container.pack(fill="both", expand=True, pady=(0, 10))
+
+        self.words_canvas = tk.Canvas(
+            words_container, bg="#eeeeee", highlightthickness=0
         )
 
-        self.words.tag_config("surface", font=("Arial", 22, "bold"))
-        self.words.tag_config("definition", font=("Arial", 14))
-
-        button_frame = tk.Frame(right_panel, bg="#eeeeee")
-
-        tk.Button(button_frame, text="⌂ Home", command=self.go_home).pack(
-            side=tk.LEFT, padx=5
+        scrollbar = tk.Scrollbar(
+            words_container, orient="vertical", command=self.words_canvas.yview
         )
 
-        tk.Button(button_frame, text="Previous", command=self.show_prev).pack(
-            side=tk.LEFT, padx=5
+        self.words_canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        self.words_canvas.pack(side="left", fill="both", expand=True)
+
+        self.words_frame = tk.Frame(self.words_canvas, bg="#eeeeee")
+
+        self.canvas_window = self.words_canvas.create_window(
+            (0, 0), window=self.words_frame, anchor="nw"
         )
 
-        tk.Button(button_frame, text="Next", command=self.show_next).pack(
-            side=tk.LEFT, padx=5
+        def resize_frame(event):
+            self.words_canvas.itemconfig(self.canvas_window, width=event.width)
+
+        self.words_canvas.bind("<Configure>", resize_frame)
+
+        self.words_frame.bind(
+            "<Configure>",
+            lambda e: self.words_canvas.configure(
+                scrollregion=self.words_canvas.bbox("all")
+            ),
         )
 
-        self.page_label.pack(pady=20)
+        # Mouse wheel scroll
+        self.words_canvas.bind(
+            "<Enter>", lambda e: self.root.bind_all("<MouseWheel>", self._scroll_words)
+        )
+        self.words_canvas.bind(
+            "<Leave>", lambda e: self.root.unbind_all("<MouseWheel>")
+        )
 
-        self.ocr_text.pack(pady=10)
-        self.words.pack(pady=10, fill="both", expand=True)
+        # -------------------
+        # Bottom bar
+        # -------------------
 
-        # Bottom container
         bottom_bar = tk.Frame(right_panel, bg="#eeeeee")
         bottom_bar.pack(side="bottom", fill="x", pady=10)
 
-        # push buttons to the right
         button_frame = tk.Frame(bottom_bar, bg="#eeeeee")
         button_frame.pack(side="right", padx=10)
 
@@ -134,19 +148,73 @@ class ImageViewer:
             side=tk.LEFT, padx=5
         )
 
-        # mouse events
+        # Mouse events
         self.canvas.bind("<Motion>", self.on_hover)
         self.canvas.bind("<Button-1>", self.on_click)
+
         self.root.bind("<Left>", lambda e: self.show_prev())
         self.root.bind("<Right>", lambda e: self.show_next())
 
         self.load_image()
-
-        # start background prefetch
         self.start_prefetch()
 
+    def _scroll_words(self, event):
+        self.words_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
     # -------------------
-    # Load Image
+    # Card UI
+    # -------------------
+
+    def insert_word_card(self, surface, pos_en, definitions):
+
+        card = tk.Frame(
+            self.words_frame,
+            bg="#ffffff",
+            highlightbackground="#cccccc",
+            highlightthickness=1,
+            padx=12,
+            pady=10,
+        )
+
+        card.pack(fill="x", padx=4, pady=6)
+
+        header = tk.Frame(card, bg="#ffffff")
+        header.pack(fill="x")
+
+        word_label = tk.Label(
+            header,
+            text=surface,
+            font=("Shippori Antique", 22, "bold"),
+            bg="#ffffff",
+        )
+        word_label.pack(side="left")
+
+        pos_label = tk.Label(
+            header,
+            text=pos_en.upper(),
+            font=("Shippori Antique", 18),
+            fg="#555555",
+            bg="#ffffff",
+        )
+        pos_label.pack(side="right")
+
+        divider = tk.Frame(card, height=1, bg="#dddddd")
+        divider.pack(fill="x", pady=6)
+
+        for d in definitions:
+            definition_label = tk.Label(
+                card,
+                text=d,
+                font=("Shippori Antique", 14),
+                bg="#ffffff",
+                anchor="w",
+                justify="left",
+                wraplength=800,
+            )
+            definition_label.pack(fill="x", pady=2)
+
+    # -------------------
+    # Image handling
     # -------------------
 
     def load_image(self):
@@ -157,19 +225,14 @@ class ImageViewer:
         self._render_image()
 
         total = len(self.image_paths)
-
-        self.page_label.config(text=f"Loading...\n{self.index + 1} / {total}")
+        self.page_label.config(text=f"Loading... {self.index + 1} / {total}")
 
         self.hover_rect = None
         self.hovered_bubble = None
 
         if path in self.page_cache:
             self.page = self.page_cache[path]
-
-            print("Loaded from cache:", path)
-
             self.page_label.config(text=f"Page: {self.index + 1} / {total}")
-
         else:
             threading.Thread(
                 target=self._load_page_background,
@@ -178,6 +241,7 @@ class ImageViewer:
             ).start()
 
     def _render_image(self):
+
         if not self.image:
             return
 
@@ -187,6 +251,7 @@ class ImageViewer:
 
         orig_w, orig_h = self.image.size
         scale = canvas_h / orig_h
+
         new_w = int(orig_w * scale)
         new_h = canvas_h
 
@@ -197,24 +262,16 @@ class ImageViewer:
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
 
-        # store scale for bubble coordinate mapping
         self.image_scale = scale
 
     def _on_canvas_resize(self, event):
         if self.image:
             self._render_image()
 
-    # -------------------
-    # Background page load
-    # -------------------
-
     def _load_page_background(self, path):
 
         page = MangaPage(path)
-
         self.page_cache[path] = page
-
-        print("Detected bubbles:", len(page.get_bubbles()), "for", path)
 
         if self.image_paths[self.index] == path:
             self.root.after(0, self._finish_page_load, page)
@@ -222,14 +279,8 @@ class ImageViewer:
     def _finish_page_load(self, page):
 
         self.page = page
-
         total = len(self.image_paths)
-
-        self.page_label.config(text=f"Page:\n{self.index + 1} / {total}")
-
-    # -------------------
-    # Prefetch entire chapter
-    # -------------------
+        self.page_label.config(text=f"Page: {self.index + 1} / {total}")
 
     def start_prefetch(self):
 
@@ -251,10 +302,7 @@ class ImageViewer:
             if path in self.page_cache:
                 continue
 
-            print("Prefetching:", path)
-
             page = MangaPage(path)
-
             self.page_cache[path] = page
 
         print("Prefetch complete.")
@@ -311,42 +359,31 @@ class ImageViewer:
         text = bubble["text"]
         self.ocr_text.config(text=text)
 
-        self.words.delete("1.0", tk.END)
+        for widget in self.words_frame.winfo_children():
+            widget.destroy()
 
         for word in tagger(text):
             surface = word.surface
             lemma = word.feature.lemma
             pos = word.feature.pos1
+            pos_en = g.POS1_MAP.get(pos, pos)
+
             if lemma == "*" or not lemma:
                 lemma = surface
 
             result = jam.lookup(lemma)
 
-            self.words.insert(tk.END, surface + "\n", "surface")
+            definitions = []
 
-            if not result.entries:
-                self.words.insert(tk.END, "  (no definition)\n", "definition")
-                continue
+            if result.entries:
+                for entry in result.entries[:2]:
+                    for sense in entry.senses[:2]:
+                        gloss = ", ".join(g.text for g in sense.gloss)
+                        definitions.append(gloss)
+            else:
+                definitions.append("(no definition)")
 
-            for entry in result.entries[:2]:
-                for sense in entry.senses[:1]:
-                    gloss = ", ".join(g.text for g in sense.gloss)
-                    self.words.insert(
-                        tk.END, f"{sense.pos[0]}  {gloss}\n", "definition"
-                    )
-
-            self.words.insert(tk.END, "\n")
-
-    # -------------------
-    # Home
-    # -------------------
-
-    def go_home(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
-        self.root.unbind("<Escape>")
-        self.root.unbind("<F11>")
-        WelcomePage(self.root, launch_reader)
+            self.insert_word_card(surface, pos_en, definitions)
 
     # -------------------
     # Navigation
@@ -364,10 +401,15 @@ class ImageViewer:
             self.index -= 1
             self.load_image()
 
+    def go_home(self):
 
-# -------------------
-# Entry point
-# -------------------
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        self.root.unbind("<Escape>")
+        self.root.unbind("<F11>")
+
+        WelcomePage(self.root, launch_reader)
 
 
 def launch_reader(folder):
@@ -377,8 +419,11 @@ def launch_reader(folder):
 
 if __name__ == "__main__":
     print("[DEBUG] Started the program.")
+
     root = tk.Tk()
+
     fonts.load_font()
+
     WelcomePage(root, launch_reader)
 
     root.mainloop()
