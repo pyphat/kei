@@ -1,11 +1,24 @@
 import os
 import threading
 import tkinter as tk
+from functools import lru_cache
 
+from fugashi import Tagger
+from jamdict import Jamdict
 from PIL import Image, ImageTk
 
 import globals as g
 from objects.mangaPage import MangaPage
+
+# -------------------
+# NLP Initialization
+# -------------------
+
+print("[DEBUG] Initializing MeCab (fugashi)")
+tagger = Tagger()
+
+print("[DEBUG] Loading JMdict dictionary")
+jam = Jamdict()
 
 
 class ImageViewer:
@@ -38,14 +51,36 @@ class ImageViewer:
         self.canvas = tk.Canvas(main_frame, cursor="cross")
         self.canvas.pack(side="left")
 
-        right_panel = tk.Frame(main_frame, width=150, bg="#eeeeee")
+        right_panel = tk.Frame(main_frame, width=1000, bg="#eeeeee")
         right_panel.pack(side="right", fill="y")
 
         self.page_label = tk.Label(
-            right_panel, text="", font=("Arial", 14), bg="#eeeeee"
+            right_panel, text="", font=("Arial", 28), bg="#eeeeee"
         )
 
+        self.ocr_text = tk.Label(
+            right_panel,
+            text="",
+            font=("Arial", 18),
+            bg="#eeeeee",
+            wraplength=960,
+            justify="left",
+        )
+
+        self.words = tk.Text(
+            right_panel,
+            font=("Arial", 14),
+            bg="#eeeeee",
+            wrap="word",
+            borderwidth=0,
+        )
+
+        self.words.tag_config("surface", font=("Arial", 22, "bold"))
+        self.words.tag_config("definition", font=("Arial", 14))
+
         self.page_label.pack(pady=20)
+        self.ocr_text.pack(pady=10)
+        self.words.pack(pady=10, fill="both", expand=True)
 
         button_frame = tk.Frame(root)
         button_frame.pack()
@@ -90,7 +125,6 @@ class ImageViewer:
         self.hover_rect = None
         self.hovered_bubble = None
 
-        # use cache if available
         if path in self.page_cache:
             self.page = self.page_cache[path]
 
@@ -184,7 +218,12 @@ class ImageViewer:
             det = bubble["bbox"]
 
             self.hover_rect = self.canvas.create_rectangle(
-                det["x1"], det["y1"], det["x2"], det["y2"], outline="green", width=2
+                det["x1"],
+                det["y1"],
+                det["x2"],
+                det["y2"],
+                outline="green",
+                width=2,
             )
 
     # -------------------
@@ -198,8 +237,28 @@ class ImageViewer:
 
         bubble = self.page.find_bubble(event.x, event.y)
 
-        if bubble:
-            self.page_label.config(text=bubble["text"])
+        if not bubble:
+            return
+
+        text = bubble["text"]
+        self.ocr_text.config(text=text)
+
+        self.words.delete("1.0", tk.END)
+
+        for word in tagger(text):
+            surface = word.surface
+            lemma = word.feature.lemma
+
+            definition = jam.lookup(lemma)
+
+            # BIG WORD
+            self.words.insert(tk.END, surface + "\n", "surface")
+
+            # DEFINITIONS
+            for entry in definition.entries:
+                self.words.insert(tk.END, str(entry) + "\n", "definition")
+
+            self.words.insert(tk.END, "\n")
 
     # -------------------
     # Navigation
@@ -220,8 +279,12 @@ class ImageViewer:
 
 if __name__ == "__main__":
     print("[DEBUG] Started the program.")
+
     root = tk.Tk()
+
     app = ImageViewer(root)
-    root.after(100, g.warm_up)  # start model loading later
+
+    root.after(100, g.warm_up)
     root.after(500, app.load_image)
+
     root.mainloop()
