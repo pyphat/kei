@@ -1,14 +1,15 @@
 import os
 import threading
 import tkinter as tk
-from functools import lru_cache
 
 from fugashi import Tagger
 from jamdict import Jamdict
 from PIL import Image, ImageTk
 
+import fonts
 import globals as g
 from objects.mangaPage import MangaPage
+from welcomePage import WelcomePage
 
 # -------------------
 # NLP Initialization
@@ -22,15 +23,25 @@ jam = Jamdict()
 
 
 class ImageViewer:
-    def __init__(self, root):
+    def __init__(self, root, folder):
 
         self.root = root
         self.root.title("manga-01")
+        self.root.attributes("-fullscreen", True)
+        self.root.bind("<Escape>", lambda e: self.root.attributes("-fullscreen", False))
+        self.root.bind("<F11>", lambda e: self.root.attributes("-fullscreen", True))
 
-        self.image_paths = [os.path.join("test", f"{i:03}.jpg") for i in range(2, 26)]
+        # Build image list from the selected folder
+        image_exts = (".jpg", ".jpeg", ".png", ".webp")
+        all_files = sorted(os.listdir(folder))
+        self.image_paths = [
+            os.path.join(folder, f) for f in all_files if f.lower().endswith(image_exts)
+        ]
 
         self.index = 0
         self.page = None
+        self.image = None
+        self.image_scale = 1.0
 
         # cache
         self.page_cache = {}
@@ -49,22 +60,28 @@ class ImageViewer:
         main_frame.pack(fill="both", expand=True)
 
         self.canvas = tk.Canvas(main_frame, cursor="cross")
-        self.canvas.pack(side="left")
+        self.canvas.pack(side="left", fill="y")
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
 
-        right_panel = tk.Frame(main_frame, width=1000, bg="#eeeeee")
-        right_panel.pack(side="right", fill="y")
+        right_panel = tk.Frame(main_frame, bg="#eeeeee")
+        right_panel.pack(side="left", fill="both", expand=True)
 
         self.page_label = tk.Label(
-            right_panel, text="", font=("Arial", 28), bg="#eeeeee"
+            right_panel, text="", font=("Shippori Antique", 28), bg="#eeeeee"
         )
 
         self.ocr_text = tk.Label(
             right_panel,
             text="",
-            font=("Arial", 18),
+            font=("Shippori Antique", 18),
             bg="#eeeeee",
-            wraplength=960,
+            wraplength=0,
             justify="left",
+        )
+
+        right_panel.bind(
+            "<Configure>",
+            lambda e: self.ocr_text.config(wraplength=e.width - 20),
         )
 
         self.words = tk.Text(
@@ -78,12 +95,36 @@ class ImageViewer:
         self.words.tag_config("surface", font=("Arial", 22, "bold"))
         self.words.tag_config("definition", font=("Arial", 14))
 
+        button_frame = tk.Frame(right_panel, bg="#eeeeee")
+
+        tk.Button(button_frame, text="⌂ Home", command=self.go_home).pack(
+            side=tk.LEFT, padx=5
+        )
+
+        tk.Button(button_frame, text="Previous", command=self.show_prev).pack(
+            side=tk.LEFT, padx=5
+        )
+
+        tk.Button(button_frame, text="Next", command=self.show_next).pack(
+            side=tk.LEFT, padx=5
+        )
+
         self.page_label.pack(pady=20)
+
         self.ocr_text.pack(pady=10)
         self.words.pack(pady=10, fill="both", expand=True)
 
-        button_frame = tk.Frame(root)
-        button_frame.pack()
+        # Bottom container
+        bottom_bar = tk.Frame(right_panel, bg="#eeeeee")
+        bottom_bar.pack(side="bottom", fill="x", pady=10)
+
+        # push buttons to the right
+        button_frame = tk.Frame(bottom_bar, bg="#eeeeee")
+        button_frame.pack(side="right", padx=10)
+
+        tk.Button(button_frame, text="⌂ Home", command=self.go_home).pack(
+            side=tk.LEFT, padx=5
+        )
 
         tk.Button(button_frame, text="Previous", command=self.show_prev).pack(
             side=tk.LEFT, padx=5
@@ -96,6 +137,8 @@ class ImageViewer:
         # mouse events
         self.canvas.bind("<Motion>", self.on_hover)
         self.canvas.bind("<Button-1>", self.on_click)
+        self.root.bind("<Left>", lambda e: self.show_prev())
+        self.root.bind("<Right>", lambda e: self.show_next())
 
         self.load_image()
 
@@ -111,12 +154,7 @@ class ImageViewer:
         path = self.image_paths[self.index]
 
         self.image = Image.open(path)
-        self.photo = ImageTk.PhotoImage(self.image)
-
-        self.canvas.config(width=self.photo.width(), height=self.photo.height())
-        self.canvas.delete("all")
-
-        self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
+        self._render_image()
 
         total = len(self.image_paths)
 
@@ -130,7 +168,7 @@ class ImageViewer:
 
             print("Loaded from cache:", path)
 
-            self.page_label.config(text=f"Page:\n{self.index + 1} / {total}")
+            self.page_label.config(text=f"Page: {self.index + 1} / {total}")
 
         else:
             threading.Thread(
@@ -138,6 +176,33 @@ class ImageViewer:
                 args=(path,),
                 daemon=True,
             ).start()
+
+    def _render_image(self):
+        if not self.image:
+            return
+
+        canvas_h = self.canvas.winfo_height()
+        if canvas_h < 2:
+            canvas_h = self.root.winfo_screenheight()
+
+        orig_w, orig_h = self.image.size
+        scale = canvas_h / orig_h
+        new_w = int(orig_w * scale)
+        new_h = canvas_h
+
+        resized = self.image.resize((new_w, new_h), Image.LANCZOS)
+        self.photo = ImageTk.PhotoImage(resized)
+
+        self.canvas.config(width=new_w, height=new_h)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
+
+        # store scale for bubble coordinate mapping
+        self.image_scale = scale
+
+    def _on_canvas_resize(self, event):
+        if self.image:
+            self._render_image()
 
     # -------------------
     # Background page load
@@ -203,7 +268,8 @@ class ImageViewer:
         if not self.page:
             return
 
-        bubble = self.page.find_bubble(event.x, event.y)
+        scale = getattr(self, "image_scale", 1.0)
+        bubble = self.page.find_bubble(int(event.x / scale), int(event.y / scale))
 
         if bubble == self.hovered_bubble:
             return
@@ -216,12 +282,13 @@ class ImageViewer:
 
         if bubble:
             det = bubble["bbox"]
+            scale = getattr(self, "image_scale", 1.0)
 
             self.hover_rect = self.canvas.create_rectangle(
-                det["x1"],
-                det["y1"],
-                det["x2"],
-                det["y2"],
+                det["x1"] * scale,
+                det["y1"] * scale,
+                det["x2"] * scale,
+                det["y2"] * scale,
                 outline="green",
                 width=2,
             )
@@ -235,7 +302,8 @@ class ImageViewer:
         if not self.page:
             return
 
-        bubble = self.page.find_bubble(event.x, event.y)
+        scale = getattr(self, "image_scale", 1.0)
+        bubble = self.page.find_bubble(int(event.x / scale), int(event.y / scale))
 
         if not bubble:
             return
@@ -248,17 +316,37 @@ class ImageViewer:
         for word in tagger(text):
             surface = word.surface
             lemma = word.feature.lemma
+            pos = word.feature.pos1
+            if lemma == "*" or not lemma:
+                lemma = surface
 
-            definition = jam.lookup(lemma)
+            result = jam.lookup(lemma)
 
-            # BIG WORD
             self.words.insert(tk.END, surface + "\n", "surface")
 
-            # DEFINITIONS
-            for entry in definition.entries:
-                self.words.insert(tk.END, str(entry) + "\n", "definition")
+            if not result.entries:
+                self.words.insert(tk.END, "  (no definition)\n", "definition")
+                continue
+
+            for entry in result.entries[:2]:
+                for sense in entry.senses[:1]:
+                    gloss = ", ".join(g.text for g in sense.gloss)
+                    self.words.insert(
+                        tk.END, f"{sense.pos[0]}  {gloss}\n", "definition"
+                    )
 
             self.words.insert(tk.END, "\n")
+
+    # -------------------
+    # Home
+    # -------------------
+
+    def go_home(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self.root.unbind("<Escape>")
+        self.root.unbind("<F11>")
+        WelcomePage(self.root, launch_reader)
 
     # -------------------
     # Navigation
@@ -277,14 +365,20 @@ class ImageViewer:
             self.load_image()
 
 
+# -------------------
+# Entry point
+# -------------------
+
+
+def launch_reader(folder):
+    app = ImageViewer(root, folder)
+    root.after(100, g.warm_up)
+
+
 if __name__ == "__main__":
     print("[DEBUG] Started the program.")
-
     root = tk.Tk()
-
-    app = ImageViewer(root)
-
-    root.after(100, g.warm_up)
-    root.after(500, app.load_image)
+    fonts.load_font()
+    WelcomePage(root, launch_reader)
 
     root.mainloop()

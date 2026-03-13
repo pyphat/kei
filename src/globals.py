@@ -16,6 +16,7 @@ _client = None
 _manga_ocr_lock = threading.Lock()
 _model_lock = threading.Lock()
 _init_event = threading.Event()
+_yolo_lock = threading.Lock()
 
 
 def _init_heavy_models():
