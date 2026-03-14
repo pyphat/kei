@@ -6,10 +6,10 @@ from fugashi import Tagger
 from jamdict import Jamdict
 from PIL import Image, ImageTk
 
-import fonts
 import globals as g
 from objects.mangaPage import MangaPage
-from welcomePage import WelcomePage
+from windows.flashcards import add_card, open_flashcards
+from windows.welcomePage import WelcomePage
 
 print("[DEBUG] Initializing MeCab (fugashi)")
 tagger = Tagger()
@@ -45,6 +45,8 @@ class ImageViewer:
 
         self.hover_rect = None
         self.hovered_bubble = None
+
+        self._flashcard_win = None  # ← track the open window
 
         # -------------------
         # Layout
@@ -136,17 +138,61 @@ class ImageViewer:
         button_frame = tk.Frame(bottom_bar, bg="#eeeeee")
         button_frame.pack(side="right", padx=10)
 
-        tk.Button(button_frame, text="⌂ Home", command=self.go_home).pack(
-            side=tk.LEFT, padx=5
-        )
+        tk.Button(
+            button_frame,
+            text="HOME",
+            command=self.go_home,
+            font=("Shippori Antique", 12),
+            relief="flat",
+            bg="#1a1612",
+            fg="white",
+            activebackground="#333",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(12, 5))
 
-        tk.Button(button_frame, text="Previous", command=self.show_prev).pack(
-            side=tk.LEFT, padx=5
-        )
+        tk.Button(
+            button_frame,
+            text="PREV",
+            command=self.show_prev,
+            font=("Shippori Antique", 12),
+            relief="flat",
+            bg="#1a1612",
+            fg="white",
+            activebackground="#333",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(12, 5))
 
-        tk.Button(button_frame, text="Next", command=self.show_next).pack(
-            side=tk.LEFT, padx=5
-        )
+        tk.Button(
+            button_frame,
+            text="NEXT",
+            command=self.show_next,
+            font=("Shippori Antique", 12),
+            relief="flat",
+            bg="#1a1612",
+            fg="white",
+            activebackground="#333",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(12, 5))
+
+        tk.Button(
+            button_frame,
+            text="FLASHCARDS  →",
+            command=self.open_flashcard_window,
+            font=("Shippori Antique", 12),
+            relief="flat",
+            bg="#1a1612",
+            fg="white",
+            activebackground="#333",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(12, 5))
 
         # Mouse events
         self.canvas.bind("<Motion>", self.on_hover)
@@ -162,10 +208,32 @@ class ImageViewer:
         self.words_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     # -------------------
+    # Flashcard window
+    # -------------------
+
+    def open_flashcard_window(self):
+        """Open or raise the flashcard Toplevel window."""
+        if self._flashcard_win and self._flashcard_win.winfo_exists():
+            self._flashcard_win.lift()
+            self._flashcard_win.focus_force()
+        else:
+            self._flashcard_win = open_flashcards(self.root)
+
+    # -------------------
+    # Readings helper
+    # -------------------
+
+    def to_readings(self, text):
+        result = g.get_kakasi().convert(text)
+        hiragana = "".join(item["hira"] for item in result)
+        romaji = "".join(item["hepburn"] for item in result)
+        return hiragana, romaji
+
+    # -------------------
     # Card UI
     # -------------------
 
-    def insert_word_card(self, surface, pos_en, definitions):
+    def insert_word_card(self, surface, pos_en, definitions, hiragana="", romaji=""):
 
         card = tk.Frame(
             self.words_frame,
@@ -184,7 +252,7 @@ class ImageViewer:
         word_label = tk.Label(
             header,
             text=surface,
-            font=("Shippori Antique", 22, "bold"),
+            font=("Shippori Antique", 22),
             bg="#ffffff",
         )
         word_label.pack(side="left")
@@ -201,6 +269,21 @@ class ImageViewer:
         divider = tk.Frame(card, height=1, bg="#dddddd")
         divider.pack(fill="x", pady=6)
 
+        # Reading row: hiragana + romaji
+        if hiragana or romaji:
+            reading_text = hiragana
+            if romaji:
+                reading_text += f"  ({romaji})"
+            tk.Label(
+                card,
+                text=reading_text,
+                font=("Shippori Antique", 14),
+                fg="#888888",
+                bg="#ffffff",
+                anchor="w",
+                justify="left",
+            ).pack(fill="x", pady=(0, 6))
+
         for d in definitions:
             definition_label = tk.Label(
                 card,
@@ -212,6 +295,52 @@ class ImageViewer:
                 wraplength=800,
             )
             definition_label.pack(fill="x", pady=2)
+
+        # ── "Add to deck" button ──────────────────────────────────────────────
+        def _add(s=surface, p=pos_en, d=definitions, btn_ref=[None]):
+            added = add_card(s, p, d)
+            label = "✓ In deck" if not added else "✓ Added!"
+            btn_ref[0].config(text=label, state="disabled", fg="#2d7a4f")
+            # If the flashcard window is open, refresh its deck view
+            if self._flashcard_win and self._flashcard_win.winfo_exists():
+                self._flashcard_win.reload_deck()
+
+        add_btn = tk.Button(
+            card,
+            text="+ Add to deck",
+            command=_add,
+            font=("Shippori Antique", 11),
+            relief="flat",
+            bg="#f5f0e8",
+            fg="#7a6f60",
+            activebackground="#ede8dc",
+            cursor="hand2",
+            bd=0,
+            padx=6,
+            pady=2,
+        )
+        add_btn.pack(anchor="e", pady=(4, 0))
+
+        # Store a reference so the closure can update the button text
+        import functools
+
+        orig_add = add_btn["command"]  # keep packing clean
+        add_btn["command"] = functools.partial(
+            lambda b, s, p, d: _add(s, p, d), add_btn, surface, pos_en, definitions
+        )
+        # Simpler: just patch _add to close over the button
+        add_btn.config(
+            command=lambda b=add_btn: (
+                add_card(surface, pos_en, definitions),
+                b.config(text="✓ In deck", state="disabled", fg="#2d7a4f"),
+                (
+                    self._flashcard_win.reload_deck()
+                    if self._flashcard_win and self._flashcard_win.winfo_exists()
+                    else None
+                ),
+            )
+        )
+        # ─────────────────────────────────────────────────────────────────────
 
     # -------------------
     # Image handling
@@ -383,7 +512,8 @@ class ImageViewer:
             else:
                 definitions.append("(no definition)")
 
-            self.insert_word_card(surface, pos_en, definitions)
+            hiragana, romaji = self.to_readings(surface)
+            self.insert_word_card(surface, pos_en, definitions, hiragana, romaji)
 
     # -------------------
     # Navigation
@@ -422,7 +552,7 @@ if __name__ == "__main__":
 
     root = tk.Tk()
 
-    fonts.load_font()
+    g.load_font()
 
     WelcomePage(root, launch_reader)
 

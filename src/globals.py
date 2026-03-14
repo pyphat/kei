@@ -3,8 +3,10 @@ import threading
 
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
+import pykakasi
 from google import genai
 from manga_ocr import MangaOcr
+from tkextrafont import Font
 from ultralytics import YOLO
 
 API_KEY = "..."
@@ -12,17 +14,37 @@ API_KEY = "..."
 _mangaOcr = None
 _model = None
 _client = None
+_kks = None
 
 _manga_ocr_lock = threading.Lock()
 _model_lock = threading.Lock()
 _init_event = threading.Event()
 _yolo_lock = threading.Lock()
+_kks_lock = threading.Lock()
+
+
+def load_font():
+    global SATOSHI, SHIPPORI_ANTIQUE
+    SATOSHI = Font(file="C:/Coding/Python/kei/src/fonts/Satoshi.ttf", family="Satoshi")
+    SHIPPORI_ANTIQUE = Font(
+        file="C:/Coding/Python/kei/src/fonts/ShipporiAntique.ttf",
+        family="Shippori Antique",
+    )
+
+
+def get_kakasi():
+    global _kks
+    with _kks_lock:
+        if _kks is None:
+            _kks = pykakasi.kakasi()
+    return _kks
 
 
 def _init_heavy_models():
     """Load MangaOCR and YOLO in background so startup is not blocked."""
     get_model()
     get_manga_ocr()
+    get_kakasi()
     _init_event.set()
     print("[DEBUG] background model init complete")
 
