@@ -8,7 +8,13 @@ from PIL import Image, ImageTk
 
 import globals as g
 from objects.mangaPage import MangaPage
-from windows.flashcards import add_card, open_flashcards
+from windows.flashcards import (
+    add_card,
+    bump_freq,
+    load_deck,
+    load_freq,
+    open_flashcards,
+)
 from windows.welcomePage import WelcomePage
 
 print("[DEBUG] Initializing MeCab (fugashi)")
@@ -16,6 +22,8 @@ tagger = Tagger()
 
 print("[DEBUG] Loading JMdict dictionary")
 jam = Jamdict()
+
+SUGGEST_THRESHOLD = 3  # times a word must be looked up before nudging the user
 
 
 class ImageViewer:
@@ -233,7 +241,9 @@ class ImageViewer:
     # Card UI
     # -------------------
 
-    def insert_word_card(self, surface, pos_en, definitions, hiragana="", romaji=""):
+    def insert_word_card(
+        self, surface, pos_en, definitions, hiragana="", romaji="", seen_count=0
+    ):
 
         card = tk.Frame(
             self.words_frame,
@@ -296,23 +306,35 @@ class ImageViewer:
             )
             definition_label.pack(fill="x", pady=2)
 
-        # ── "Add to deck" button ──────────────────────────────────────────────
-        def _add(s=surface, p=pos_en, d=definitions, btn_ref=[None]):
-            added = add_card(s, p, d)
-            label = "✓ In deck" if not added else "✓ Added!"
-            btn_ref[0].config(text=label, state="disabled", fg="#2d7a4f")
-            # If the flashcard window is open, refresh its deck view
-            if self._flashcard_win and self._flashcard_win.winfo_exists():
-                self._flashcard_win.reload_deck()
+        # ── Smart suggest + "Add to deck" button ─────────────────────────────
+        deck = load_deck()
+        already_in_deck = any(c["word"] == surface for c in deck)
+
+        suggest = (seen_count >= SUGGEST_THRESHOLD) and not already_in_deck
+
+        if suggest:
+            tk.Label(
+                card,
+                text=f"👀 You've looked this up {seen_count}× — add it to your deck?",
+                font=("Shippori Antique", 11),
+                fg="#a07820",
+                bg="#fffbe6",
+                anchor="w",
+                padx=6,
+                pady=4,
+            ).pack(fill="x", pady=(6, 2))
+
+        btn_text = "⚡ Add to deck" if suggest else "+ Add to deck"
+        btn_bg = "#fff8dc" if suggest else "#f5f0e8"
+        btn_fg = "#a07820" if suggest else "#7a6f60"
 
         add_btn = tk.Button(
             card,
-            text="+ Add to deck",
-            command=_add,
+            text=btn_text,
             font=("Shippori Antique", 11),
             relief="flat",
-            bg="#f5f0e8",
-            fg="#7a6f60",
+            bg=btn_bg,
+            fg=btn_fg,
             activebackground="#ede8dc",
             cursor="hand2",
             bd=0,
@@ -321,25 +343,19 @@ class ImageViewer:
         )
         add_btn.pack(anchor="e", pady=(4, 0))
 
-        # Store a reference so the closure can update the button text
-        import functools
+        def _add(b=add_btn):
+            added = add_card(surface, pos_en, definitions)
+            label = "✓ In deck" if not added else "✓ Added!"
+            b.config(text=label, state="disabled", fg="#2d7a4f", bg="#f0fff4")
+            if self._flashcard_win and self._flashcard_win.winfo_exists():
+                self._flashcard_win.reload_deck()
 
-        orig_add = add_btn["command"]  # keep packing clean
-        add_btn["command"] = functools.partial(
-            lambda b, s, p, d: _add(s, p, d), add_btn, surface, pos_en, definitions
-        )
-        # Simpler: just patch _add to close over the button
-        add_btn.config(
-            command=lambda b=add_btn: (
-                add_card(surface, pos_en, definitions),
-                b.config(text="✓ In deck", state="disabled", fg="#2d7a4f"),
-                (
-                    self._flashcard_win.reload_deck()
-                    if self._flashcard_win and self._flashcard_win.winfo_exists()
-                    else None
-                ),
+        add_btn.config(command=_add)
+
+        if already_in_deck:
+            add_btn.config(
+                text="✓ In deck", state="disabled", fg="#2d7a4f", bg="#f0fff4"
             )
-        )
         # ─────────────────────────────────────────────────────────────────────
 
     # -------------------
@@ -513,7 +529,13 @@ class ImageViewer:
                 definitions.append("(no definition)")
 
             hiragana, romaji = self.to_readings(surface)
-            self.insert_word_card(surface, pos_en, definitions, hiragana, romaji)
+
+            # Bump frequency counter and pass the new count to the card
+            seen_count = bump_freq(surface)
+
+            self.insert_word_card(
+                surface, pos_en, definitions, hiragana, romaji, seen_count=seen_count
+            )
 
     # -------------------
     # Navigation

@@ -10,6 +10,7 @@ from tkextrafont import Font
 from ultralytics import YOLO
 
 API_KEY = "..."
+DIR_PATH = os.path.dirname(__file__)
 
 _mangaOcr = None
 _model = None

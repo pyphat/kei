@@ -4,7 +4,10 @@ import random
 import tkinter as tk
 from tkinter import messagebox
 
-DECK_PATH = os.path.join(os.path.dirname(__file__), "flashcard_deck.json")
+import globals
+
+DECK_PATH = os.path.join(globals.DIR_PATH, "flashcard_deck.json")
+FREQ_PATH = os.path.join(globals.DIR_PATH, "word_freq.json")
 
 # ── Persistence ──────────────────────────────────────────────────────────────
 
@@ -34,6 +37,25 @@ def add_card(word, pos, definitions):
     deck.append({"word": word, "pos": pos, "defs": definitions, "score": 0})
     save_deck(deck)
     return True
+
+
+# ── Frequency tracking ────────────────────────────────────────────────────────
+
+
+def load_freq():
+    if os.path.exists(FREQ_PATH):
+        with open(FREQ_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def bump_freq(word):
+    """Increment lookup count for a word. Returns new count."""
+    freq = load_freq()
+    freq[word] = freq.get(word, 0) + 1
+    with open(FREQ_PATH, "w", encoding="utf-8") as f:
+        json.dump(freq, f, ensure_ascii=False, indent=2)
+    return freq[word]
 
 
 # ── Flashcard Window ──────────────────────────────────────────────────────────
