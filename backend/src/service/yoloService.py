@@ -4,9 +4,8 @@ import globals
 
 
 class YoloService:
-    def __init__(self, image_url: str, threaded: bool):
+    def __init__(self, image_url: str):
         self.image_url = image_url
-        self.threaded = threaded
         self.model = globals.get_model()
 
     def run(self):

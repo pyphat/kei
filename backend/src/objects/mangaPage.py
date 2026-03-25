@@ -22,14 +22,7 @@ class MangaPage:
         x2 = det["x2"]
         y2 = det["y2"]
 
-        ocr_service = OcrService(
-            x1,
-            y1,
-            x2,
-            y2,
-            self.image_path,
-            False,
-        )
+        ocr_service = OcrService(x1, y1, x2, y2, self.image_path)
 
         text = ocr_service.run()
 
@@ -37,7 +30,7 @@ class MangaPage:
 
     def _process_page(self):
 
-        yolo_service = YoloService(self.image_path, False)
+        yolo_service = YoloService(self.image_path)
         detections = yolo_service.run()
 
         filtered = [d for d in detections if d["class"] == self.target_class]

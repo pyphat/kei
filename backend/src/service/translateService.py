@@ -1,5 +1,9 @@
 import globals
 
+"""
+unused, might update soon.
+"""
+
 
 class TranslateService:
     def __init__(self, japanese_text, threaded):

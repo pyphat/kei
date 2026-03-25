@@ -4,11 +4,8 @@ import globals
 
 
 class OcrService:
-    def __init__(
-        self, x: int, y: int, endX: int, endY: int, image_url: str, threaded: bool
-    ):
+    def __init__(self, x: int, y: int, endX: int, endY: int, image_url: str):
         self.image_url = image_url
-        self.threaded = threaded
         self.x = x
         self.y = y
         self.endX = endX
