@@ -31,6 +31,19 @@ def _natkey(p):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", p.name)]
 
 
+def chapter_key(path):
+    """The cache key open_chapter derives for a folder/zip."""
+    path = Path(path)
+    if path.is_dir():
+        pages = sorted([p for p in path.iterdir() if p.suffix.lower() in _IMG_EXT],
+                       key=_natkey)
+        return hashlib.sha1((str(path.resolve()) + "|".join(p.name for p in pages))
+                            .encode()).hexdigest()[:12]
+    st = path.stat()
+    return hashlib.sha1(f"{path.resolve()}:{st.st_size}:{st.st_mtime}"
+                        .encode()).hexdigest()[:12]
+
+
 class ReaderService:
     def __init__(self, settings, translator=None, ocr=None):
         self.s = settings
@@ -52,12 +65,9 @@ class ReaderService:
         if path.is_dir():
             pages = sorted([p for p in path.iterdir() if p.suffix.lower() in _IMG_EXT],
                            key=_natkey)
-            key = hashlib.sha1((str(path.resolve()) + "|".join(p.name for p in pages))
-                               .encode()).hexdigest()[:12]
+            key = chapter_key(path)
         elif path.suffix.lower() in (".cbz", ".zip"):
-            st = path.stat()
-            key = hashlib.sha1(f"{path.resolve()}:{st.st_size}:{st.st_mtime}"
-                               .encode()).hexdigest()[:12]
+            key = chapter_key(path)
             dest = self.s.cache_path / key / "src"
             if not dest.exists():
                 dest.mkdir(parents=True, exist_ok=True)

@@ -4,3 +4,4 @@ __pycache__/
 debug_out/
 models/big-lama.pt
 test/
+.devdata/

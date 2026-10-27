@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["kei_core*"]
+include = ["kei_core*", "api_fastapi*"]

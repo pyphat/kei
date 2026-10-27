@@ -1,6 +1,8 @@
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import torch
@@ -9,6 +11,28 @@ CONFIG_PATH = Path.home() / ".kei" / "config.json"
 DEFAULT_CACHE = Path.home() / ".kei" / "cache"
 LOG_DIR = Path.home() / ".kei" / "logs"
 LOG_PATH = LOG_DIR / "kei.log"
+DEFAULT_LIBRARY = Path.home() / ".kei" / "library"
+
+_QUIET = ("httpx", "httpcore", "urllib3", "PIL", "ultralytics",
+          "transformers", "manga_ocr")
+
+
+def setup_logging(debug=False):
+    """App-side logging: console + rotating file. Libraries must not call this."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-5s %(threadName)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG if debug else logging.INFO)
+    for h in (logging.StreamHandler(),
+              RotatingFileHandler(LOG_PATH, maxBytes=1_000_000,
+                                  backupCount=3, encoding="utf-8")):
+        h.setFormatter(fmt)
+        root.addHandler(h)
+    if not debug:
+        for name in _QUIET:
+            logging.getLogger(name).setLevel(logging.WARNING)
+    return LOG_PATH
 
 
 def _default_font() -> str:
@@ -37,6 +61,7 @@ class Settings:
     inpainter: str = "auto"  # auto | opencv | lama
     device: str = "auto"  # auto | cuda | cpu
     cache_dir: str = ""
+    library_dir: str = ""
     det_conf: float = 0.4
     batch_pages: int = 5
 
@@ -47,6 +72,10 @@ class Settings:
     @property
     def cache_path(self) -> Path:
         return Path(self.cache_dir) if self.cache_dir else DEFAULT_CACHE
+
+    @property
+    def library_path(self) -> Path:
+        return Path(self.library_dir) if self.library_dir else DEFAULT_LIBRARY
 
     @property
     def resolved_font(self) -> str:

@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+input, select, textarea {
+  @apply rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-100;
+}
+button {
+  @apply cursor-pointer;
+}
+.btn {
+  @apply rounded bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-40;
+}
+.btn-primary {
+  @apply rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40;
+}
