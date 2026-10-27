@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kei-core"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "ultralytics",
+    "opencv-python",
+    "pillow",
+    "numpy",
+    "manga-ocr",
+    "httpx",
+]
+
+[tool.setuptools.packages.find]
+include = ["kei_core*"]
