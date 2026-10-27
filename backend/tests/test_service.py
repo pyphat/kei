@@ -1,4 +1,6 @@
+import logging
 import shutil
+import threading
 import zipfile
 from pathlib import Path
 
@@ -102,6 +104,58 @@ def test_clear_cache_cbz(tmp_path):
     svc.process_page(0)
     assert svc._is_processed(0)
     assert svc.get_blocks(0)
+
+
+class BlockingTranslator(Translator):
+    def __init__(self):
+        self.gate = threading.Event()
+        self.started = threading.Event()
+
+    def translate(self, items):
+        self.started.set()
+        self.gate.wait(30)
+        return {k: f"EN:{k}" for k in items}
+
+
+def test_stale_translation_discarded(tmp_path, caplog):
+    svc = make_service(tmp_path)
+    svc.process_page(0)
+    svc.set_translator(BlockingTranslator())
+    bt = svc.translator
+    result = []
+    th = threading.Thread(target=lambda: result.append(
+        svc.translate_pending()))
+    th.start()
+    assert bt.started.wait(5)
+    svc.clear_cache()
+    bt.gate.set()
+    with caplog.at_level(logging.INFO, logger="kei_core.service"):
+        th.join(5)
+    assert not th.is_alive()
+    assert result == [[]]
+    assert "discarding stale" in caplog.text
+    assert svc.get_blocks(0) == []
+    assert not (svc._page_dir(0) / "translations.json").exists()
+
+
+def test_process_during_translate(tmp_path):
+    chapter = tmp_path / "chapter"
+    chapter.mkdir()
+    shutil.copy(PAGE, chapter / "001.jpg")
+    shutil.copy(PAGE, chapter / "002.jpg")
+    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv")
+    svc = ReaderService(s, translator=BlockingTranslator(),
+                        ocr=PassthroughOCR("jp"))
+    svc.open_chapter(chapter)
+    svc.process_page(0)
+    th = threading.Thread(target=lambda: svc.translate_pending())
+    th.start()
+    assert svc.translator.started.wait(5)
+    svc.process_page(1)  # must not wait on the in-flight translate call
+    assert svc._is_processed(1)
+    svc.translator.gate.set()
+    th.join(5)
+    assert not th.is_alive()
 
 
 def test_delete_and_add_block(tmp_path):

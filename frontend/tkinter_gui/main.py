@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 
 def setup_logging(debug=False):
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    if sys.stderr:  # Windows console is cp1252; OCR text in debug logs would error
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-5s %(threadName)s %(name)s: %(message)s")
     root = logging.getLogger()

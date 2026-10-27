@@ -1,13 +1,13 @@
 _ocr = None
 
 
-def get_ocr():
+def get_ocr(force_cpu=False):
     """Lazy manga-ocr engine; instance is callable on a PIL crop."""
     global _ocr
     if _ocr is None:
         from manga_ocr import MangaOcr
 
-        _ocr = MangaOcr()
+        _ocr = MangaOcr(force_cpu=force_cpu)
     return _ocr
 
 

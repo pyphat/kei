@@ -20,9 +20,10 @@ def _detector():
     return _model
 
 
-def detect(img, conf=0.4):
+def detect(img, conf=0.4, device=None):
     """Return (frames, texts) as lists of (x1,y1,x2,y2) int boxes."""
-    res = _detector()(img, conf=conf, verbose=False)[0]
+    kw = {"device": device} if device else {}
+    res = _detector()(img, conf=conf, verbose=False, **kw)[0]
     frames, texts = [], []
     for b in res.boxes:
         box = tuple(int(v) for v in b.xyxy[0].tolist())

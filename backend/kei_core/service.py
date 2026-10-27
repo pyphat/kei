@@ -35,13 +35,15 @@ class ReaderService:
     def __init__(self, settings, translator=None, ocr=None):
         self.s = settings
         self.translator = translator or OpenRouterTranslator(settings)
-        self.ocr = ocr or (lambda crop: _ocr.get_ocr()(crop))  # lazy: model loads on first page
+        self.ocr = ocr or (lambda crop: _ocr.get_ocr(
+            force_cpu=self.device == "cpu")(crop))  # lazy: model loads on first page
         self._lock = threading.Lock()
         self.pages: list[Path] = []
         self._chapter = ""
         self._lru = OrderedDict()  # (page, version) -> PIL translated render
         self._version = {}
         self._sha = {}  # page index -> image sha (memoized; files don't change)
+        self._gen = 0  # bumped on open/clear/reset; stale translate batches die
 
     # --- chapter ---
 
@@ -71,6 +73,7 @@ class ReaderService:
             self._lru.clear()
             self._version.clear()
             self._sha.clear()
+            self._gen += 1
         log.info("chapter opened path=%s pages=%d key=%s device=%s",
                  path, len(pages), key, self.device)
         return len(pages)
@@ -144,7 +147,7 @@ class ReaderService:
         img = self._page_bgr(i)
         cb("detecting")
         t = time.time()
-        frames_raw, texts = _detect.detect(img, self.s.det_conf)
+        frames_raw, texts = _detect.detect(img, self.s.det_conf, self.device)
         frames, blocks = _detect.order_blocks(frames_raw, texts, i, self.s.reading_rtl)
         t_det = time.time() - t
         cb("ocr")
@@ -182,6 +185,7 @@ class ReaderService:
         with self._lock:
             shutil.rmtree(self._page_dir(i), ignore_errors=True)
             self._bump(i)
+            self._gen += 1
             log.info("reset page %d", i)
 
     def clear_cache(self):
@@ -198,32 +202,38 @@ class ReaderService:
                     shutil.rmtree(child) if child.is_dir() else child.unlink()
             self._lru.clear()
             self._version.clear()
+            self._gen += 1
             log.info("cleared cache for chapter %s", self._chapter)
 
     def translate_pending(self, start=0, max_pages=None):
         limit = max_pages or self.s.batch_pages
         items, id2page, updated = {}, {}, []
-        for i in range(start, len(self.pages)):
-            if len(updated) >= limit:
-                break
-            if not self._is_processed(i):
-                continue
-            _, blocks = self._load_state(i)
-            if not blocks:
-                continue
-            have = self._load_translations(i)
-            todo = [b for b in blocks if b.source and b.id not in have]
-            if not todo:
-                continue
-            for b in todo:
-                items[b.id] = b.source
-                id2page[b.id] = i
-            updated.append(i)
+        with self._lock:
+            gen, chapter = self._gen, self._chapter
+            for i in range(start, len(self.pages)):
+                if len(updated) >= limit:
+                    break
+                if not self._is_processed(i):
+                    continue
+                _, blocks = self._load_state(i)
+                if not blocks:
+                    continue
+                have = self._load_translations(i)
+                todo = [b for b in blocks if b.source and b.id not in have]
+                if not todo:
+                    continue
+                for b in todo:
+                    items[b.id] = b.source
+                    id2page[b.id] = i
+                updated.append(i)
         if not items:
             return []
         log.info("translate batch pages=%s items=%d", updated, len(items))
         result = self.translator.translate(items)
         with self._lock:
+            if gen != self._gen or chapter != self._chapter:
+                log.info("discarding stale translation batch")
+                return []
             per_page = {}
             for bid, text in result.items():
                 per_page.setdefault(id2page[bid], {})[bid] = text
@@ -248,15 +258,18 @@ class ReaderService:
         if view == "clean":
             return Image.open(self._page_dir(i) / "clean.png").convert("RGB")
         key = (i, self._version.get(i, 0))
-        if key not in self._lru:
+        img = self._lru.get(key)
+        if img is None:
             t = time.time()
             blocks = self.get_blocks(i)
             clean = self.get_page(i, "clean")
-            self._lru[key] = _typeset.render(clean, blocks, self.s)
+            img = _typeset.render(clean, blocks, self.s)
             log.debug("render page %d %.2fs", i, time.time() - t)
-            while len(self._lru) > 8:
-                self._lru.popitem(last=False)
-        return self._lru[key]
+            with self._lock:
+                self._lru[key] = img
+                while len(self._lru) > 8:
+                    self._lru.popitem(last=False)
+        return img
 
     # --- edits ---
 

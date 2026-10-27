@@ -5,18 +5,66 @@ import threading
 log = logging.getLogger(__name__)
 
 
+class TranslatorThread(threading.Thread):
+    """Drains translate_pending on its own thread so slow HTTP calls never
+    stall page processing. Kicked via an Event by the processing thread."""
+
+    def __init__(self, svc, out):
+        super().__init__(daemon=True)
+        self.svc = svc
+        self.out = out
+        self.auto = False
+        self.armed = True
+        self.current = 0
+        self._kick = threading.Event()
+        self._stop = False
+
+    def kick(self):
+        self.armed = True
+        self._kick.set()
+
+    def stop(self):
+        self._stop = True
+        self._kick.set()
+
+    def run(self):
+        while True:
+            self._kick.wait()
+            self._kick.clear()
+            if self._stop:
+                return
+            if not (self.auto and self.armed):
+                continue
+            if not self.svc.s.openrouter_key:
+                self.out.put(("no_key",))
+                self.auto = False
+                self.armed = False
+                continue
+            self.armed = False  # disarm until the next kick
+            try:
+                while True:
+                    updated = self.svc.translate_pending(start=self.current)
+                    self.out.put(("usage", self.svc.requests_today()))
+                    if not updated:
+                        break
+                    self.out.put(("translated", updated))
+            except Exception as e:
+                log.exception("translate failed")
+                self.out.put(("translate_error", str(e)))
+
+
 class Worker(threading.Thread):
-    """Owns every slow ReaderService call. GUI posts commands on `q`,
-    results come back on `out`."""
+    """Owns slow ReaderService calls except translation, which runs on
+    TranslatorThread. GUI posts commands on `q`, results come back on `out`."""
 
     def __init__(self, svc, q, out):
         super().__init__(daemon=True)
         self.svc = svc
         self.q = q
         self.out = out
-        self.auto = False
-        self.armed = True   # no-spin guard: re-armed by a newly processed page
         self.current = 0
+        self.translator = TranslatorThread(svc, out)
+        self.translator.start()
 
     def run(self):
         while True:
@@ -28,6 +76,7 @@ class Worker(threading.Thread):
                 log.exception("worker command failed: %s", cmd)
                 self.out.put(("error", f"{cmd[0]}: {e}"))
             if cmd[0] == "stop":
+                self.translator.stop()
                 return
 
     def _do(self, cmd):
@@ -50,20 +99,19 @@ class Worker(threading.Thread):
             for nxt in later:
                 self.q.put(nxt)
             self.current = i
+            self.translator.current = i
             self._process(i)
-            for j in range(i + 1, min(i + 4, self.svc.page_count)):
+            ahead = max(3, self.svc.s.batch_pages)
+            for j in range(i + 1, min(i + 1 + ahead, self.svc.page_count)):
                 if not self.q.empty():  # newer work arrived; abandon prefetch
                     break
                 self._process(j)
-            self._maybe_translate(i)  # one batched request for the page + prefetched pages
         elif c == "translate":
-            self.armed = True
-            self._maybe_translate(self.current)
+            self.translator.kick()
         elif c == "auto":
-            self.auto = cmd[1]
-            if self.auto:
-                self.armed = True
-                self._maybe_translate(self.current)
+            self.translator.auto = cmd[1]
+            if self.translator.auto:
+                self.translator.kick()
         elif c == "add_block":
             self.svc.add_block(cmd[1], cmd[2])
             self.out.put(("page_ready", cmd[1]))
@@ -74,7 +122,7 @@ class Worker(threading.Thread):
             self.svc.reset_page(cmd[1])
         elif c == "clear_cache":
             self.svc.clear_cache()
-            self.armed = True  # cleared pages need translating again
+            self.translator.kick()
             self.out.put(("cleared",))
         elif c == "models":
             self.out.put(("models", self.svc.list_free_models()))
@@ -89,22 +137,4 @@ class Worker(threading.Thread):
                                       self.out.put(("progress", i, s))))
         self.out.put(("page_ready", i))
         if stages:  # did real work (cache hit fires no callbacks)
-            self.armed = True
-
-    def _maybe_translate(self, i):
-        if not (self.auto and self.armed):
-            return
-        if not self.svc.s.openrouter_key:
-            self.out.put(("no_key",))
-            self.auto = False
-            self.armed = False
-            return
-        self.armed = False
-        try:
-            updated = self.svc.translate_pending(start=i)
-        except Exception as e:
-            self.out.put(("translate_error", str(e)))
-            return
-        self.out.put(("usage", self.svc.requests_today()))
-        if updated:
-            self.out.put(("translated", updated))
+            self.translator.kick()
