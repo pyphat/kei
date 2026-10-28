@@ -61,14 +61,24 @@ def _flat_fill(crop, mask):
     return med
 
 
-def _paste(out, x1, y1, patch, mask):
-    m = cv2.GaussianBlur(mask, (5, 5), 0).astype(np.float32) / 255
+def _paste(out, x1, y1, patch, mask, feather=3):
+    if feather > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                      (2 * feather + 1, 2 * feather + 1))
+        soft = cv2.GaussianBlur(cv2.dilate(mask, k),
+                                (2 * feather + 1, 2 * feather + 1),
+                                0).astype(np.float32) / 255
+        # everything inside the mask is fully replaced; only the grown
+        # edge blends outward
+        a = np.maximum(soft, mask.astype(np.float32) / 255)
+    else:
+        a = (mask > 0).astype(np.float32)
     roi = out[y1:y1 + patch.shape[0], x1:x1 + patch.shape[1]]
     out[y1:y1 + patch.shape[0], x1:x1 + patch.shape[1]] = (
-        patch * m[..., None] + roi * (1 - m[..., None])).astype(np.uint8)
+        patch * a[..., None] + roi * (1 - a[..., None])).astype(np.uint8)
 
 
-def clean(img_bgr, mask, boxes, inpainter="auto", device="cpu"):
+def clean(img_bgr, mask, boxes, inpainter="auto", device="cpu", feather=3):
     """Inpaint masked pixels. Per box: flat fill -> cv2.inpaint or LaMa,
     routed by inpainter: opencv = flat|cv2, lama = always LaMa, auto = flat|LaMa."""
     out = img_bgr.copy()
@@ -91,7 +101,7 @@ def clean(img_bgr, mask, boxes, inpainter="auto", device="cpu"):
         else:
             res = _lama(crop, m, device)
             counts["lama"] += 1
-        _paste(out, x1, y1, res, m)
+        _paste(out, x1, y1, res, m, feather)
     log.info("inpaint routing flat=%d lama=%d opencv=%d",
              counts["flat"], counts["lama"], counts["opencv"])
     return out

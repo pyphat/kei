@@ -1,7 +1,7 @@
 import logging
 import tkinter as tk
 from dataclasses import asdict
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,14 @@ class SettingsDialog(tk.Toplevel):
         self.det_conf = _entry(body, r, "Detection confidence",
                                s.det_conf); r += 1
         self.batch = _entry(body, r, "Batch pages", s.batch_pages); r += 1
+        self.masker = self._combo(body, r, "Masker", s.masker,
+                                  ["combined", "model", "threshold"]); r += 1
+        self.mask_dilate = _entry(body, r, "Mask grow (px)",
+                                  s.mask_dilate); r += 1
+        self.mask_feather = _entry(body, r, "Edge feather (px)",
+                                   s.mask_feather); r += 1
+        self.mask_thresh = _entry(body, r, "Text model threshold",
+                                  s.mask_thresh); r += 1
 
         btns = ttk.Frame(body)
         btns.grid(row=r, column=0, columnspan=2, pady=8)
@@ -94,13 +102,21 @@ class SettingsDialog(tk.Toplevel):
                             if l.strip()]
         s.target_lang = self.lang.get().strip() or s.target_lang
         s.font_path = self.font_path.get().strip()
-        s.font_min = int(self.font_min.get())
-        s.font_max = int(self.font_max.get())
         s.inpainter = self.inpainter.get()
         s.device = self.device.get()
         s.cache_dir = self.cache_dir.get().strip()
-        s.det_conf = float(self.det_conf.get())
-        s.batch_pages = int(self.batch.get())
+        s.masker = self.masker.get()
+        try:
+            s.font_min = int(self.font_min.get())
+            s.font_max = int(self.font_max.get())
+            s.det_conf = float(self.det_conf.get())
+            s.batch_pages = int(self.batch.get())
+            s.mask_dilate = int(self.mask_dilate.get())
+            s.mask_feather = int(self.mask_feather.get())
+            s.mask_thresh = float(self.mask_thresh.get())
+        except ValueError as e:
+            messagebox.showerror("Settings", f"Bad number: {e}")
+            return
         s.save()
         log.info("settings saved: %s",
                  {k: v for k, v in asdict(s).items() if k != "api_key"})

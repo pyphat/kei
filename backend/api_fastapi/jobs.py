@@ -111,6 +111,32 @@ class Runner:
             self._tasks.put(lambda: None)
             self._kick.set()
 
+    def reprocess_page(self, cid, idx):
+        """Reset one page's cache and re-queue it for processing."""
+        svc = self.get_service(cid)
+        pos = self.svc_pos(cid, idx)
+        if svc is not None and pos is not None:
+            self.call(lambda: svc.reset_page(pos), timeout=60)
+        self.failed.pop((cid, idx), None)
+        self._queued.discard((cid, idx))
+        self._prio.append((cid, idx))
+        self._queued.add((cid, idx))
+        self._focused.add(cid)
+        self.focus_page[cid] = idx
+        self._tasks.put(lambda: None)
+        self._kick.set()
+        publish({"type": "page", "chapter_id": cid, "page": idx,
+                 "status": "queued"})
+
+    def reprocess_chapter(self, cid):
+        """Clear the whole chapter cache and re-run everything."""
+        svc = self.get_service(cid)
+        if svc is not None:
+            self.call(svc.clear_cache, timeout=60)
+        for k in [k for k in self.failed if k[0] == cid]:
+            del self.failed[k]
+        self.start(cid)
+
     def call(self, fn, timeout=120):
         """Run fn on the processing thread; returns its result."""
         done = threading.Event()

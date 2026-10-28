@@ -378,6 +378,20 @@ def create_app(settings=None, translator=None, ocr=None):
                  "status": runner.page_status(cid, idx)})
         return {"ok": True}
 
+    @app.post("/api/chapters/{cid}/pages/{idx}/reprocess")
+    def page_reprocess(cid: int, idx: int):
+        get_chapter_or_404(cid)
+        if not lib.get_page(cid, idx):
+            raise HTTPException(404, "page not found")
+        runner.reprocess_page(cid, idx)
+        return {"ok": True}
+
+    @app.post("/api/chapters/{cid}/reprocess")
+    def chapter_reprocess(cid: int):
+        get_chapter_or_404(cid)
+        runner.reprocess_chapter(cid)
+        return {"ok": True}
+
     # ---------- translation ----------
 
     @app.post("/api/chapters/{cid}/translate")
@@ -423,9 +437,40 @@ def create_app(settings=None, translator=None, ocr=None):
     @app.patch("/api/settings")
     def settings_patch(body: dict = Body(...)):
         known = set(Settings.__dataclass_fields__)
+        coerced = {}
         for k, v in body.items():
-            if k in known:
-                setattr(s, k, v)
+            if k not in known:
+                continue
+            cur = getattr(s, k)
+            if isinstance(cur, list):
+                if not isinstance(v, list):
+                    raise HTTPException(422, f"{k} must be a list")
+                coerced[k] = v
+            elif isinstance(cur, bool):
+                if not isinstance(v, bool):
+                    raise HTTPException(422, f"{k} must be a bool")
+                coerced[k] = v
+            else:
+                try:
+                    coerced[k] = (int(v) if isinstance(cur, int)
+                                  else float(v) if isinstance(cur, float)
+                                  else str(v))
+                except (TypeError, ValueError):
+                    raise HTTPException(422, f"bad value for {k}: {v!r}")
+        for k in ("masker", "inpainter", "device"):
+            choices = {"masker": ("threshold", "model", "combined"),
+                       "inpainter": ("auto", "opencv", "lama"),
+                       "device": ("auto", "cuda", "cpu")}[k]
+            if k in coerced and coerced[k] not in choices:
+                raise HTTPException(422, f"{k} must be one of {choices}")
+        for k in ("mask_dilate", "mask_feather"):
+            if k in coerced and not 0 <= coerced[k] <= 20:
+                raise HTTPException(422, f"{k} must be 0..20")
+        for k in ("mask_thresh", "det_conf"):
+            if k in coerced and not 0 <= coerced[k] <= 1:
+                raise HTTPException(422, f"{k} must be 0..1")
+        for k, v in coerced.items():
+            setattr(s, k, v)
         s.save()
         if hasattr(runner.translator, "_free"):
             runner.translator._free = None

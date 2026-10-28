@@ -150,6 +150,11 @@ function ChapterRow({ c, progress, invalidate }: {
       <td className="align-top">
         <div className="flex flex-wrap gap-1">
           <Link className="btn !px-2 !py-1 text-xs" href={readHref}>Read</Link>
+          <button className="btn !px-2 !py-1 text-xs"
+                  onClick={() => confirm("Re-cleans with current settings and re-translates (uses OpenRouter requests); edited translations are lost.")
+                    && api.reprocessChapter(c.id).then(invalidate)}>
+            Reprocess
+          </button>
           {c.state === "running"
             ? <button className="btn !px-2 !py-1 text-xs" onClick={() => tr.mutate("pause")}>Pause</button>
             : <button className="btn !px-2 !py-1 text-xs" onClick={() => tr.mutate("start")}>Translate</button>}

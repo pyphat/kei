@@ -26,6 +26,7 @@ class FakeTranslator(Translator):
 def client(tmp_path):
     s = Settings(library_dir=str(tmp_path / "lib"),
                  cache_dir=str(tmp_path / "cache"), inpainter="opencv",
+                 masker="threshold",  # keep tests off the real CTD model
                  api_key="test-key")
     s.save = lambda *a, **k: None  # never touch the user's real config
     app = create_app(s, translator=FakeTranslator(), ocr=PassthroughOCR("jp"))
@@ -271,3 +272,42 @@ def test_settings_never_leaks_key(client):
     assert "api_key" not in r.json()
     assert "SEKRET" not in r.text
     assert r.json()["target_lang"] == "German"
+
+
+def test_settings_validation(client):
+    c, s, tmp = client
+    assert c.patch("/api/settings", json={"masker": "bogus"}).status_code == 422
+    assert c.patch("/api/settings", json={"mask_dilate": 99}).status_code == 422
+    assert c.patch("/api/settings", json={"mask_feather": -1}).status_code == 422
+    assert c.patch("/api/settings", json={"mask_thresh": 2}).status_code == 422
+    assert c.patch("/api/settings", json={"batch_pages": "abc"}).status_code == 422
+    assert c.patch("/api/settings",
+                   json={"model_priority": "notalist"}).status_code == 422
+    # values are coerced and persisted
+    r = c.patch("/api/settings",
+                json={"masker": "model", "mask_dilate": "7",
+                      "mask_thresh": "0.5"})
+    assert r.status_code == 200
+    assert r.json()["masker"] == "model"
+    assert r.json()["mask_dilate"] == 7
+    assert r.json()["mask_thresh"] == 0.5
+    assert s.masker == "model" and s.mask_dilate == 7
+
+
+def test_reprocess_page(client):
+    c, s, tmp = client
+    sid, cid = put_chapter(c, images=("010.jpg",))
+    r = c.post(f"/api/chapters/{cid}/pages/0/reprocess")
+    assert r.status_code == 200
+    # page is re-queued and gets processed (and translated by the fake)
+    deadline = time.time() + 240
+    while time.time() < deadline:
+        d = c.get(f"/api/chapters/{cid}").json()
+        if d["pages"][0]["status"] in ("processed", "translated"):
+            break
+        time.sleep(0.5)
+    else:
+        pytest.fail("page not reprocessed")
+    assert d["pages"][0]["status"] == "translated"
+    assert c.post(f"/api/chapters/{cid}/pages/9/reprocess").status_code == 404
+    assert c.post(f"/api/chapters/999/reprocess").status_code == 404

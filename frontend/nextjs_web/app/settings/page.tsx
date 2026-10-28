@@ -18,8 +18,9 @@ export default function SettingsPage() {
       for (const [k, v] of Object.entries(form)) {
         if (k === "model_priority")
           b[k] = v.split("\n").map((x) => x.trim()).filter(Boolean);
-        else if (["font_min", "font_max", "batch_pages"].includes(k)) b[k] = parseInt(v);
-        else if (k === "det_conf") b[k] = parseFloat(v);
+        else if (["font_min", "font_max", "batch_pages",
+                  "mask_dilate", "mask_feather"].includes(k)) b[k] = parseInt(v);
+        else if (["det_conf", "mask_thresh"].includes(k)) b[k] = parseFloat(v);
         else b[k] = v;
       }
       return api.patchSettings(b);
@@ -104,6 +105,30 @@ export default function SettingsPage() {
       {row("Batch pages",
         <input type="number" value={form.batch_pages ?? s.batch_pages} aria-label="Batch pages"
                onChange={(e) => setForm({ ...form, batch_pages: e.target.value })} />)}
+
+      <h2 className="pt-2 text-sm font-semibold uppercase text-neutral-400">Masking</h2>
+      {row("Masker",
+        <select value={form.masker ?? s.masker} aria-label="Masker"
+                onChange={(e) => setForm({ ...form, masker: e.target.value })}>
+          <option value="combined">combined</option>
+          <option value="model">model</option>
+          <option value="threshold">threshold</option>
+        </select>)}
+      {row("Mask grow (px)",
+        <input type="number" min="0" max="20" value={form.mask_dilate ?? s.mask_dilate}
+               aria-label="Mask grow"
+               onChange={(e) => setForm({ ...form, mask_dilate: e.target.value })} />)}
+      {row("Edge feather (px)",
+        <input type="number" min="0" max="20" value={form.mask_feather ?? s.mask_feather}
+               aria-label="Edge feather"
+               onChange={(e) => setForm({ ...form, mask_feather: e.target.value })} />)}
+      {row("Text model threshold",
+        <input type="number" step="0.05" min="0" max="1" value={form.mask_thresh ?? s.mask_thresh}
+               aria-label="Text model threshold"
+               onChange={(e) => setForm({ ...form, mask_thresh: e.target.value })} />)}
+      <p className="text-xs text-neutral-500">
+        Applies to newly processed pages — use Reprocess.
+      </p>
 
       <div className="flex items-center gap-3">
         <button className="btn-primary" onClick={() => save.mutate()}

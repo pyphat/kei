@@ -179,6 +179,9 @@ function Reader() {
           ? <button className="btn !py-1" onClick={() => tr.mutate("pause")}>Pause tr.</button>
           : <button className="btn !py-1" onClick={() => tr.mutate("start")}>Translate</button>}
         <button className="btn !py-1" onClick={() => setCover.mutate()}>Set as cover</button>
+        <button className="btn !py-1"
+                onClick={() => confirm("Re-cleans with current settings and re-translates (uses OpenRouter requests); edited translations are lost.")
+                  && api.reprocessPage(cid, pg.idx)}>Reprocess page</button>
         {mode === "single" && view !== "original" && (
           <button className={`btn !py-1 ${editing ? "bg-indigo-700" : ""}`} aria-pressed={editing}
                   onClick={() => { setEditing(!editing); setSelBlock(null); }}>

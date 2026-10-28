@@ -169,9 +169,12 @@ class ReaderService:
         t_ocr = time.time() - t
         cb("cleaning")
         t = time.time()
-        m = _mask.build_mask(img, [b.bbox for b in blocks])
+        m = _mask.build_mask(img, [b.bbox for b in blocks],
+                             self.s.masker, self.s.mask_dilate,
+                             self.s.mask_thresh)
         clean = _inpaint.clean(img, m, [b.bbox for b in blocks],
-                               self.s.inpainter, self.device)
+                               self.s.inpainter, self.device,
+                               self.s.mask_feather)
         t_clean = time.time() - t
         log.info("page %d processed blocks=%d detect=%.1fs ocr=%.1fs clean=%.1fs",
                  i, len(blocks), t_det, t_ocr, t_clean)
@@ -296,9 +299,12 @@ class ReaderService:
             frames, blocks = self._load_state(i)
             blocks = [b for b in blocks if b.id != block_id]
             img = self._page_bgr(i)
-            m = _mask.build_mask(img, [b.bbox for b in blocks])
+            m = _mask.build_mask(img, [b.bbox for b in blocks],
+                                 self.s.masker, self.s.mask_dilate,
+                                 self.s.mask_thresh)
             clean = _inpaint.clean(img, m, [b.bbox for b in blocks],
-                                   self.s.inpainter, self.device)
+                                   self.s.inpainter, self.device,
+                                   self.s.mask_feather)
             self._save_state(i, frames, blocks)
             cv2.imwrite(str(self._page_dir(i) / "clean.png"), clean)
             tr = self._load_translations(i)
@@ -319,9 +325,12 @@ class ReaderService:
             base = self._page_dir(i) / "clean.png"
             base_img = (cv2.imdecode(np.fromfile(base, np.uint8), cv2.IMREAD_COLOR)
                         if base.exists() else img)
-            m = _mask.build_mask(img, [bbox])
+            m = _mask.build_mask(img, [bbox],
+                                 self.s.masker, self.s.mask_dilate,
+                                 self.s.mask_thresh)
             clean = _inpaint.clean(base_img, m, [bbox],
-                                   self.s.inpainter, self.device)
+                                   self.s.inpainter, self.device,
+                                   self.s.mask_feather)
             blocks.append(block)
             self._save_state(i, frames, blocks)
             cv2.imwrite(str(self._page_dir(i) / "clean.png"), clean)

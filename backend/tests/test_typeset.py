@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from kei_core.typeset import _render_box
+from kei_core.typeset import _render_box, _sizes, _widen
 
 
 def test_render_box_uses_bubble():
@@ -18,3 +18,19 @@ def test_render_box_dark_background():
     img = np.full((400, 400), 40, np.uint8)
     bbox = (190, 140, 210, 260)
     assert _render_box(img, bbox) == bbox
+
+
+def test_widen_grows_narrow_box_on_white():
+    img = np.full((400, 400), 255, np.uint8)
+    img[:, 150] = 0  # black vertical line left of the box
+    box = (200, 100, 230, 220)  # w=30, h=120 -> needs w>=96
+    x1, y1, x2, y2 = _widen(img, box)
+    assert y1 == 100 and y2 == 220
+    assert x1 >= 151  # stopped at the black line, didn't cross it
+    assert x2 - x1 >= int(0.8 * 120)  # reached target width via the right side
+
+
+def test_sizes_cap_at_median():
+    assert _sizes([28, 10, 10]) == [10, 10, 10]
+    assert _sizes([28]) == [28]  # single block unchanged
+    assert _sizes([]) == []

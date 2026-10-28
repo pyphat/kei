@@ -67,6 +67,10 @@ export interface SettingsDict {
   library_dir: string;
   det_conf: number;
   batch_pages: number;
+  masker: "threshold" | "model" | "combined";
+  mask_dilate: number;
+  mask_feather: number;
+  mask_thresh: number;
   has_key: boolean;
 }
 
@@ -158,6 +162,11 @@ export const api = {
     req<{ state: string }>(`/api/chapters/${cid}/translate`, json({ action })),
   focus: (cid: number, page: number) =>
     req<{ ok: boolean }>(`/api/chapters/${cid}/focus`, json({ page })),
+  reprocessPage: (cid: number, idx: number) =>
+    req<{ ok: boolean }>(`/api/chapters/${cid}/pages/${idx}/reprocess`,
+      { method: "POST" }),
+  reprocessChapter: (cid: number) =>
+    req<{ ok: boolean }>(`/api/chapters/${cid}/reprocess`, { method: "POST" }),
 
   status: () => req<Status>("/api/status"),
   models: () => req<{ id: string; name: string }[]>("/api/models"),

@@ -24,7 +24,7 @@ def make_service(tmp_path):
     chapter = tmp_path / "chapter"
     chapter.mkdir()
     shutil.copy(PAGE, chapter / "001.jpg")
-    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv")
+    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv", masker="threshold")
     svc = ReaderService(s, translator=FakeTranslator(), ocr=PassthroughOCR("jp"))
     assert svc.open_chapter(chapter) == 1
     return svc
@@ -89,7 +89,7 @@ def test_clear_cache_cbz(tmp_path):
     cbz = tmp_path / "ch.cbz"
     with zipfile.ZipFile(cbz, "w") as z:
         z.write(PAGE, "001.jpg")
-    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv")
+    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv", masker="threshold")
     svc = ReaderService(s, translator=FakeTranslator(),
                         ocr=PassthroughOCR("jp"))
     assert svc.open_chapter(cbz) == 1
@@ -143,7 +143,7 @@ def test_process_during_translate(tmp_path):
     chapter.mkdir()
     shutil.copy(PAGE, chapter / "001.jpg")
     shutil.copy(PAGE, chapter / "002.jpg")
-    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv")
+    s = Settings(cache_dir=str(tmp_path / "cache"), inpainter="opencv", masker="threshold")
     svc = ReaderService(s, translator=BlockingTranslator(),
                         ocr=PassthroughOCR("jp"))
     svc.open_chapter(chapter)

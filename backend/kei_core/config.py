@@ -64,6 +64,10 @@ class Settings:
     library_dir: str = ""
     det_conf: float = 0.4
     batch_pages: int = 5
+    masker: str = "combined"  # threshold | model | combined
+    mask_dilate: int = 4      # px to grow the text mask
+    mask_feather: int = 3     # px soft edge, outside the mask
+    mask_thresh: float = 0.3  # text-model probability cutoff
 
     @property
     def openrouter_key(self) -> str:
