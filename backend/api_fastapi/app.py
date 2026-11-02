@@ -175,9 +175,15 @@ def create_app(settings=None, translator=None, ocr=None):
     @app.get("/api/chapters/{cid}")
     def chapter_get(cid: int):
         ch = get_chapter_or_404(cid)
-        pages = [{"idx": p["idx"], "width": p["width"], "height": p["height"],
-                  "status": runner.page_status(cid, p["idx"])}
-                 for p in lib.pages(cid)]
+        svc = runner.get_service(cid)
+        pages = []
+        for p in lib.pages(cid):
+            pos = runner.svc_pos(cid, p["idx"]) if svc else None
+            pages.append({
+                "idx": p["idx"], "width": p["width"], "height": p["height"],
+                "status": runner.page_status(cid, p["idx"]),
+                "rev": svc.page_rev(pos) if svc and pos is not None else 0,
+            })
         return {"id": cid, "series_id": ch["series_id"], "number": ch["number"],
                 "title": ch["title"], "state": runner.chapter_state(cid),
                 "pages": pages}

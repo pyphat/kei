@@ -37,7 +37,7 @@ export interface ChapterDetail {
   number: number;
   title: string;
   state: "running" | "paused" | "idle";
-  pages: { idx: number; width: number; height: number; status: PageStatus }[];
+  pages: { idx: number; width: number; height: number; status: PageStatus; rev: number }[];
 }
 
 export interface Blocks {
@@ -179,6 +179,6 @@ export const api = {
     req<ProgressRow>(`/api/progress/${sid}`, { ...json(b), method: "PUT" }),
   continueReading: () => req<ContinueRow[]>("/api/continue"),
 
-  pageImage: (cid: number, idx: number, view: string, v = 0) =>
-    `/api/chapters/${cid}/pages/${idx}/image?view=${view}&v=${v}`,
+  pageImage: (cid: number, idx: number, view: string, rev = 0) =>
+    `/api/chapters/${cid}/pages/${idx}/image?view=${view}&v=${rev}`,
 };

@@ -115,6 +115,16 @@ class ReaderService:
                 self.pages[i].read_bytes()).hexdigest()[:12]
         return self.s.cache_path / self._chapter / self._sha[i]
 
+    def page_rev(self, i) -> int:
+        d = self._page_dir(i)
+        rev = 0
+        for name in ("clean.png", "translations.json"):
+            try:
+                rev = max(rev, (d / name).stat().st_mtime_ns)
+            except FileNotFoundError:
+                pass
+        return rev
+
     def _load_state(self, i):
         f = self._page_dir(i) / "blocks.json"
         if not f.exists():

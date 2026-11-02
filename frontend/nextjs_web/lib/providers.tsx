@@ -1,6 +1,8 @@
 "use client";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ThemeProvider } from "next-themes";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { EventsProvider } from "@/lib/events";
 
 let browser: QueryClient | undefined;
@@ -14,8 +16,13 @@ function getClient() {
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <QueryClientProvider client={getClient()}>
-      <EventsProvider>{children}</EventsProvider>
-    </QueryClientProvider>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem
+                   disableTransitionOnChange>
+      <QueryClientProvider client={getClient()}>
+        <TooltipProvider>
+          <EventsProvider>{children}</EventsProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }

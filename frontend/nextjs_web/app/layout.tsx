@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import "./globals.css";
 import { Providers } from "@/lib/providers";
 import { Nav } from "@/lib/nav";
@@ -7,11 +8,11 @@ export const metadata: Metadata = { title: "kei" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
+    <html lang="en" suppressHydrationWarning>
+      <body className="min-h-screen">
         <Providers>
-          <Nav />
-          <main className="mx-auto max-w-6xl px-3 pb-16">{children}</main>
+          <Suspense fallback={null}><Nav /></Suspense>
+          <main className="min-h-[calc(100vh-4rem)]">{children}</main>
         </Providers>
       </body>
     </html>

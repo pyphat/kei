@@ -218,6 +218,33 @@ def test_translate_flow(client):
     assert im.format == "PNG"
 
 
+def test_chapter_page_rev_tracks_processing_and_translation_edit(client):
+    c, _, _ = client
+    _, cid = put_chapter(c, images=("010.jpg",))
+    assert c.get(f"/api/chapters/{cid}").json()["pages"][0]["rev"] == 0
+
+    c.post(f"/api/chapters/{cid}/focus", json={"page": 0})
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        page = c.get(f"/api/chapters/{cid}").json()["pages"][0]
+        if page["status"] in ("processed", "translated"):
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("page not processed")
+    processed_rev = page["rev"]
+    assert processed_rev > 0
+
+    blocks = c.get(f"/api/chapters/{cid}/pages/0/blocks").json()["blocks"]
+    assert blocks
+    time.sleep(0.01)
+    r = c.patch(f"/api/chapters/{cid}/pages/0/blocks/{blocks[0]['id']}",
+                json={"translation": "edited"})
+    assert r.status_code == 200
+    edited_rev = c.get(f"/api/chapters/{cid}").json()["pages"][0]["rev"]
+    assert edited_rev > processed_rev
+
+
 def test_progress(client):
     c, s, tmp = client
     sid, cid = put_chapter(c)

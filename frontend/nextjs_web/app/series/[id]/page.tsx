@@ -1,9 +1,35 @@
 "use client";
+
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Suspense, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft, BookOpen, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Trash2, Languages,
+} from "lucide-react";
+import { toast } from "sonner";
 import { api, type ChapterSummary } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const REPROCESS_WARNING =
+  "Re-cleans with current settings and re-translates (uses OpenRouter requests); edited translations are lost.";
 
 export default function Page() {
   return <Suspense><SeriesPage /></Suspense>;
@@ -14,156 +40,295 @@ function SeriesPage() {
   const sid = Number(id);
   const qc = useQueryClient();
   const router = useRouter();
-  const { data: s } = useQuery({ queryKey: ["series", sid], queryFn: () => api.getSeries(sid) });
-  const inv = () => qc.invalidateQueries({ queryKey: ["series"] });
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const patch = useMutation({
-    mutationFn: (b: Parameters<typeof api.patchSeries>[1]) => api.patchSeries(sid, b),
-    onSuccess: inv,
+  const { data: series } = useQuery({
+    queryKey: ["series", sid], queryFn: () => api.getSeries(sid), refetchInterval: 5000,
   });
-  const cover = useMutation({ mutationFn: (f: File) => api.uploadCover(sid, f), onSuccess: inv });
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [edit, setEdit] = useState({ title: "", author: "", tags: "" });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["series"] });
+    qc.invalidateQueries({ queryKey: ["series", sid] });
+  };
+  const patch = useMutation({
+    mutationFn: () => api.patchSeries(sid, {
+      title: edit.title.trim(), author: edit.author.trim(),
+      tags: edit.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+    }),
+    onSuccess: () => { setEditOpen(false); invalidate(); toast.success("Series details saved"); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
+  });
+  const cover = useMutation({
+    mutationFn: (file: File) => api.uploadCover(sid, file),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
+  });
   const translateAll = useMutation({
     mutationFn: async () => {
-      for (const c of s?.chapters ?? []) await api.translate(c.id, "start");
+      for (const chapter of series?.chapters ?? []) await api.translate(chapter.id, "start");
     },
-    onSuccess: inv,
+    onSuccess: () => { invalidate(); toast.success("Translation queued for all chapters"); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
   });
   const del = useMutation({
     mutationFn: () => api.deleteSeries(sid),
-    onSuccess: () => router.push("/"),
+    onSuccess: () => { setDeleteOpen(false); router.push("/"); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
   });
 
-  if (!s) return <div className="p-8 text-neutral-400">Loading…</div>;
+  if (!series) return <SeriesSkeleton />;
+  const resume = series.progress
+    ? `/read/${series.progress.chapter_id}?page=${series.progress.page}`
+    : series.chapters[0] ? `/read/${series.chapters[0].id}` : `/upload?series=${sid}`;
 
   return (
-    <div className="space-y-5 pt-4">
-      <div className="flex flex-wrap gap-4">
-        <button aria-label="Change cover" title="Change cover"
-                onClick={() => fileRef.current?.click()}
-                className="h-56 w-40 shrink-0 overflow-hidden rounded bg-neutral-800">
-          {s.cover_url
-            ? <img src={s.cover_url} alt={s.title} className="h-full w-full object-cover" />
-            : <span className="text-xs text-neutral-500">no cover — click to add</span>}
-        </button>
-        <input ref={fileRef} type="file" accept="image/*" className="hidden"
-               aria-label="Upload cover"
-               onChange={(e) => e.target.files?.[0] && cover.mutate(e.target.files[0])} />
-        <div className="min-w-0 flex-1 space-y-2">
-          <Editable label="Title" value={s.title} big
-                    onSave={(title) => patch.mutate({ title })} />
-          <Editable label="Author" value={s.author}
-                    onSave={(author) => patch.mutate({ author })} />
-          <Editable label="Tags (comma separated)" value={s.tags.join(", ")}
-                    onSave={(v) => patch.mutate({ tags: v.split(",").map((t) => t.trim()).filter(Boolean) })} />
-          <div className="flex flex-wrap gap-2 pt-1">
-            <button className="btn-primary" disabled={translateAll.isPending}
-                    onClick={() => translateAll.mutate()}>Translate all</button>
-            <Link className="btn" href={`/upload?series=${sid}`}>Add chapters</Link>
-            <button className="btn text-red-300"
-                    onClick={() => confirm(`Delete "${s.title}"?`) && del.mutate()}>
-              Delete series
-            </button>
+    <div className="mx-auto max-w-7xl space-y-8 px-4 py-7 sm:px-6">
+      <section className="relative isolate overflow-hidden rounded-3xl border bg-card">
+        {series.cover_url && (
+          <img src={series.cover_url} alt="" aria-hidden="true"
+               className="absolute inset-0 -z-20 size-full scale-110 object-cover opacity-20 blur-3xl" />
+        )}
+        <div className="absolute inset-0 -z-10 bg-gradient-to-r from-background via-background/90 to-background/60" />
+        <div className="grid gap-6 p-5 sm:grid-cols-[180px_1fr] sm:gap-8 sm:p-8">
+          <button aria-label="Change cover" title="Change cover"
+                  onClick={() => fileRef.current?.click()}
+                  className="aspect-[2/3] w-36 overflow-hidden rounded-xl bg-muted shadow-2xl shadow-black/25 ring-1 ring-border sm:w-full">
+            {series.cover_url ? <img src={series.cover_url} alt={series.title} className="size-full object-cover" />
+              : <div className="flex size-full flex-col items-center justify-center gap-3 p-4 text-center text-sm text-muted-foreground">
+                  <BookOpen className="size-8" />Add cover
+                </div>}
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" aria-label="Upload cover"
+                 onChange={(e) => {
+                   const file = e.target.files?.[0];
+                   if (file) cover.mutate(file);
+                   e.target.value = "";
+                 }} />
+          <div className="flex min-w-0 flex-col justify-center">
+            <Button asChild variant="ghost" size="sm" className="mb-5 w-fit -ml-2 text-muted-foreground">
+              <Link href="/"><ArrowLeft />Library</Link>
+            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {series.tags.slice(0, 5).map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}
+            </div>
+            <h1 className="mt-3 break-words text-3xl font-bold tracking-tight sm:text-4xl">{series.title}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">{series.author || "Unknown author"}</p>
+            <p className="mt-4 text-sm text-muted-foreground">
+              {series.chapter_count} chapters <span className="px-1">·</span> {series.page_count} pages
+            </p>
+            <div className="mt-6 flex flex-wrap gap-2">
+              <Button asChild>
+                <Link href={resume}><Play />Continue reading</Link>
+              </Button>
+              <Button variant="secondary" onClick={() => translateAll.mutate()}
+                      disabled={translateAll.isPending || !series.chapters.length}>
+                <Languages />Translate all
+              </Button>
+              <Button asChild variant="outline">
+                <Link href={`/upload?series=${sid}`}><Plus />Add chapters</Link>
+              </Button>
+              <Button variant="outline" onClick={() => {
+                setEdit({ title: series.title, author: series.author, tags: series.tags.join(", ") });
+                setEditOpen(true);
+              }}>
+                <Pencil />Edit details
+              </Button>
+              <Button variant="ghost" aria-label="Delete series" onClick={() => setDeleteOpen(true)}>
+                <Trash2 />
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs uppercase text-neutral-500">
-            <tr>
-              <th className="py-1 pr-3">#</th><th className="pr-3">Title</th>
-              <th className="w-64 pr-3">Progress</th>
-              <th className="pr-3">State</th><th />
-            </tr>
-          </thead>
-          <tbody>
-            {s.chapters.map((c) => (
-              <ChapterRow key={c.id} c={c}
-                          progress={s.progress?.chapter_id === c.id ? s.progress : null}
-                          invalidate={inv} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Separator />
+
+      <section className="space-y-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">In this collection</p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">Chapters</h2>
+          </div>
+          <span className="text-xs text-muted-foreground">{series.chapters.length} total</span>
+        </div>
+        <div className="space-y-3">
+          {series.chapters.map((chapter) => (
+            <ChapterRow key={chapter.id} chapter={chapter}
+                        progress={series.progress?.chapter_id === chapter.id ? series.progress : null}
+                        invalidate={invalidate} />
+          ))}
+          {!series.chapters.length && (
+            <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+              No chapters yet. <Link className="text-primary underline underline-offset-4" href={`/upload?series=${sid}`}>Add the first one</Link>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <form onSubmit={(e) => { e.preventDefault(); patch.mutate(); }}>
+            <DialogHeader>
+              <DialogTitle>Edit series</DialogTitle>
+              <DialogDescription>Update the details shown on your shelf.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-5">
+              <label className="grid gap-2 text-sm font-medium">Title
+                <Input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">Author
+                <Input value={edit.author} onChange={(e) => setEdit({ ...edit, author: e.target.value })} />
+              </label>
+              <label className="grid gap-2 text-sm font-medium">Tags <span className="text-xs font-normal text-muted-foreground">Comma separated</span>
+                <Input value={edit.tags} onChange={(e) => setEdit({ ...edit, tags: e.target.value })} />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={!edit.title.trim() || patch.isPending}>Save changes</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this series?</AlertDialogTitle>
+            <AlertDialogDescription>This removes {series.title} and all its chapters from the library.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={(e) => { e.preventDefault(); del.mutate(); }}>
+              Delete series
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-function Editable({ label, value, onSave, big }: {
-  label: string; value: string; onSave: (v: string) => void; big?: boolean;
-}) {
-  const [v, setV] = useState(value);
+function SeriesSkeleton() {
   return (
-    <label className="block">
-      <span className="sr-only">{label}</span>
-      <input value={v} onChange={(e) => setV(e.target.value)}
-             onBlur={() => v !== value && onSave(v)}
-             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-             className={`w-full border-transparent bg-transparent ${big ? "text-xl font-bold" : "text-neutral-300"}`} />
-    </label>
-  );
-}
-
-function Bar({ label, n, total, cls }: { label: string; n: number; total: number; cls: string }) {
-  return (
-    <div className="flex items-center gap-1 text-[10px] text-neutral-400">
-      <span className="w-14">{label}</span>
-      <div className="h-1.5 flex-1 rounded bg-neutral-800">
-        <div className={`h-1.5 rounded ${cls}`}
-             style={{ width: `${total ? (n / total) * 100 : 0}%` }} />
-      </div>
-      <span className="w-10 text-right">{n}/{total}</span>
+    <div className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-6">
+      <Skeleton className="h-72 rounded-3xl" />
+      <Skeleton className="h-24 rounded-xl" />
+      <Skeleton className="h-24 rounded-xl" />
     </div>
   );
 }
 
-function ChapterRow({ c, progress, invalidate }: {
-  c: ChapterSummary;
+function ChapterRow({ chapter, progress, invalidate }: {
+  chapter: ChapterSummary;
   progress: { page: number; percent: number } | null;
   invalidate: () => void;
 }) {
-  const del = useMutation({ mutationFn: () => api.deleteChapter(c.id), onSuccess: invalidate });
-  const tr = useMutation({
-    mutationFn: (a: "start" | "pause") => api.translate(c.id, a),
-    onSuccess: invalidate,
+  const [reprocessOpen, setReprocessOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const del = useMutation({
+    mutationFn: () => api.deleteChapter(chapter.id),
+    onSuccess: () => { setDeleteOpen(false); invalidate(); toast.success("Chapter deleted"); },
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
   });
-  const readHref = `/read/${c.id}${progress ? `?page=${progress.page}` : ""}`;
+  const tr = useMutation({
+    mutationFn: (action: "start" | "pause") => api.translate(chapter.id, action),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
+  });
+  const readHref = `/read/${chapter.id}${progress ? `?page=${progress.page}` : ""}`;
+  const status = chapter.state;
+
   return (
-    <tr className="border-t border-neutral-800">
-      <td className="py-2 pr-3 align-top text-neutral-400">{c.number}</td>
-      <td className="pr-3 align-top">
-        <Editable label="Chapter title" value={c.title || `Chapter ${c.number}`}
-                  onSave={(title) => api.patchChapter(c.id, { title }).then(invalidate)} />
-      </td>
-      <td className="space-y-0.5 pr-3 align-top">
-        <Bar label="uploaded" n={c.present_count} total={c.page_count} cls="bg-neutral-500" />
-        <Bar label="processed" n={c.processed_count} total={c.page_count} cls="bg-sky-500" />
-        <Bar label="translated" n={c.translated_count} total={c.page_count} cls="bg-indigo-500" />
-      </td>
-      <td className="pr-3 align-top">
-        <span className={`rounded-full px-2 py-0.5 text-[10px] ${
-          c.state === "running" ? "bg-emerald-900 text-emerald-200"
-          : c.state === "paused" ? "bg-amber-900 text-amber-200"
-          : "bg-neutral-800 text-neutral-400"}`}>{c.state}</span>
-      </td>
-      <td className="align-top">
-        <div className="flex flex-wrap gap-1">
-          <Link className="btn !px-2 !py-1 text-xs" href={readHref}>Read</Link>
-          <button className="btn !px-2 !py-1 text-xs"
-                  onClick={() => confirm("Re-cleans with current settings and re-translates (uses OpenRouter requests); edited translations are lost.")
-                    && api.reprocessChapter(c.id).then(invalidate)}>
-            Reprocess
-          </button>
-          {c.state === "running"
-            ? <button className="btn !px-2 !py-1 text-xs" onClick={() => tr.mutate("pause")}>Pause</button>
-            : <button className="btn !px-2 !py-1 text-xs" onClick={() => tr.mutate("start")}>Translate</button>}
-          <button className="btn !px-2 !py-1 text-xs text-red-300"
-                  onClick={() => confirm("Delete this chapter?") && del.mutate()}>
-            Delete
-          </button>
+    <div className="grid gap-4 rounded-2xl border bg-card/70 p-4 shadow-sm transition hover:border-primary/30 sm:grid-cols-[minmax(180px,1fr)_minmax(220px,1.1fr)_auto] sm:items-center sm:p-5">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 font-semibold text-primary">
+          {chapter.number}
         </div>
-      </td>
-    </tr>
+        <div className="min-w-0">
+          <p className="truncate font-medium">{chapter.title || `Chapter ${chapter.number}`}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{chapter.page_count} pages</span>
+            {progress && <span>· page {progress.page + 1} ({Math.round(progress.percent)}%)</span>}
+            <Badge variant={status === "running" ? "default" : status === "paused" ? "secondary" : "outline"}
+                   className="h-5 px-1.5 text-[10px]">{status}</Badge>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <CountProgress label="Uploaded" value={chapter.present_count} total={chapter.page_count} />
+        <CountProgress label="Processed" value={chapter.processed_count} total={chapter.page_count} />
+        <CountProgress label="Translated" value={chapter.translated_count} total={chapter.page_count} />
+      </div>
+      <div className="flex items-center gap-2">
+        <Button asChild size="sm">
+          <Link href={readHref}><BookOpen />Read</Link>
+        </Button>
+        <Button variant="outline" size="sm" className="hidden sm:inline-flex"
+                onClick={() => tr.mutate(status === "running" ? "pause" : "start")}>
+          {status === "running" ? "Pause" : "Translate"}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" variant="ghost" aria-label={`Chapter ${chapter.number} actions`}>
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem className="sm:hidden"
+              onSelect={() => tr.mutate(status === "running" ? "pause" : "start")}>
+              {status === "running" ? "Pause translation" : "Translate"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setReprocessOpen(true)}><RefreshCw />Reprocess</DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onSelect={() => setDeleteOpen(true)}><Trash2 />Delete chapter</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <AlertDialog open={reprocessOpen} onOpenChange={setReprocessOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reprocess chapter?</AlertDialogTitle>
+            <AlertDialogDescription>{REPROCESS_WARNING}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={(e) => {
+              e.preventDefault();
+              api.reprocessChapter(chapter.id).then(() => {
+                setReprocessOpen(false);
+                invalidate();
+                toast.success("Chapter queued for reprocessing");
+              }).catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+            }}>Reprocess</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete chapter?</AlertDialogTitle>
+            <AlertDialogDescription>This removes this chapter and its cached pages.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={(e) => { e.preventDefault(); del.mutate(); }}>
+              Delete chapter
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+function CountProgress({ label, value, total }: { label: string; value: number; total: number }) {
+  const pct = total ? (value / total) * 100 : 0;
+  return (
+    <div className="grid grid-cols-[62px_1fr_42px] items-center gap-2 text-[10px] text-muted-foreground">
+      <span>{label}</span><Progress value={pct} className="h-1.5" />
+      <span className="text-right">{value}/{total}</span>
+    </div>
   );
 }

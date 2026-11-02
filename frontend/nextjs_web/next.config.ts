@@ -5,6 +5,7 @@ const API = process.env.KEI_API_URL ?? "http://127.0.0.1:8000";
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
+  devIndicators: false,
   turbopack: {
     rules: {
       "*.css": {
