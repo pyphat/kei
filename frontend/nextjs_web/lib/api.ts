@@ -46,6 +46,8 @@ export interface Blocks {
   blocks: { id: string; bbox: [number, number, number, number]; source: string; translation: string }[];
 }
 
+export interface SearchHit { idx: number; block_id: string; source: string; translation: string }
+
 export interface Status {
   device: string;
   requests_today: number;
@@ -131,6 +133,13 @@ export const api = {
     if (!r.ok) throw new ApiError(r.status, (await r.json()).detail ?? "cover failed");
     return r.json() as Promise<{ cover_url: string }>;
   },
+  uploadFont: async (f: File) => {
+    const fd = new FormData();
+    fd.append("file", f);
+    const r = await fetch("/api/settings/font", { method: "POST", body: fd });
+    if (!r.ok) throw new ApiError(r.status, (await r.json()).detail ?? "font upload failed");
+    return r.json() as Promise<SettingsDict>;
+  },
   coverFromPage: (sid: number, chapter_id: number, page: number) =>
     req<{ cover_url: string }>(`/api/series/${sid}/cover/from-page`,
       json({ chapter_id, page })),
@@ -154,6 +163,8 @@ export const api = {
 
   getBlocks: (cid: number, idx: number) =>
     req<Blocks>(`/api/chapters/${cid}/pages/${idx}/blocks`),
+  searchChapter: (cid: number, q: string) =>
+    req<SearchHit[]>(`/api/chapters/${cid}/search?q=${encodeURIComponent(q)}`),
   patchBlock: (cid: number, idx: number, bid: string, translation: string) =>
     req<{ ok: boolean }>(`/api/chapters/${cid}/pages/${idx}/blocks/${bid}`,
       { ...json({ translation }), method: "PATCH" }),

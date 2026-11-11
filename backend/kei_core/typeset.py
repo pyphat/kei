@@ -1,8 +1,21 @@
+import re
+
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 _PAD = 4
+# shortcut: no kinsoku (JP line-start punctuation rules), add if users complain
+_TOKEN = re.compile(r"[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]|[^\s\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]+|\s+")
+_THAI = re.compile(r"[\u0e00-\u0e7f]")
+
+
+def _tokens(para):
+    if not _THAI.search(para):
+        return _TOKEN.findall(para)
+    from pythainlp.tokenize import word_tokenize  # lazy: only pay the import for Thai text
+    return [t for w in word_tokenize(para, engine="newmm", keep_whitespace=True)
+            for t in ([w] if _THAI.search(w) else _TOKEN.findall(w))]
 
 
 def _font(path, size):
@@ -16,14 +29,14 @@ def _wrap(draw, text, font, max_w):
     lines = []
     for para in text.split("\n"):
         line = ""
-        for word in para.split(" "):
-            cand = word if not line else line + " " + word
-            if not line or draw.textlength(cand, font=font) <= max_w:
+        for tok in _tokens(para.strip()):
+            cand = line + tok
+            if not line.strip() or draw.textlength(cand, font=font) <= max_w:
                 line = cand
             else:
-                lines.append(line)
-                line = word
-        lines.append(line)
+                lines.append(line.rstrip())
+                line = tok.lstrip()
+        lines.append(line.rstrip())
     return lines
 
 

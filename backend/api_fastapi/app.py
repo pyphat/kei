@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from PIL import Image
+from PIL import Image, ImageFont
 
 from kei_core.config import Settings, setup_logging
 from kei_core.library import EXTS, Library, natkey, norm_ext
@@ -372,6 +372,24 @@ def create_app(settings=None, translator=None, ocr=None):
                       for b in svc.get_blocks(pos)]
         return {"width": p["width"], "height": p["height"], "blocks": blocks}
 
+    @app.get("/api/chapters/{cid}/search")
+    def chapter_search(cid: int, q: str = ""):
+        get_chapter_or_404(cid)
+        needle = q.strip().casefold()
+        svc = runner.get_service(cid)
+        hits = []
+        if not needle or svc is None:
+            return hits
+        for p in lib.pages(cid):
+            pos = runner.svc_pos(cid, p["idx"])
+            if pos is None or not svc._is_processed(pos):
+                continue
+            for b in svc.get_blocks(pos):
+                if needle in b.source.casefold() or needle in b.translation.casefold():
+                    hits.append({"idx": p["idx"], "block_id": b.id,
+                                 "source": b.source, "translation": b.translation})
+        return hits
+
     @app.patch("/api/chapters/{cid}/pages/{idx}/blocks/{bid}")
     def block_patch(cid: int, idx: int, bid: str, body: dict = Body(...)):
         svc = runner.get_service(cid)
@@ -440,6 +458,11 @@ def create_app(settings=None, translator=None, ocr=None):
         d["has_key"] = bool(s.openrouter_key)
         return d
 
+    def drop_renders():
+        for svc in list(runner._svc.values()):
+            with svc._lock:
+                svc._lru.clear()
+
     @app.patch("/api/settings")
     def settings_patch(body: dict = Body(...)):
         known = set(Settings.__dataclass_fields__)
@@ -477,9 +500,32 @@ def create_app(settings=None, translator=None, ocr=None):
                 raise HTTPException(422, f"{k} must be 0..1")
         for k, v in coerced.items():
             setattr(s, k, v)
+        if coerced.keys() & {"font_path", "font_min", "font_max"}:
+            drop_renders()
         s.save()
         if hasattr(runner.translator, "_free"):
             runner.translator._free = None
+        return settings_get()
+
+    @app.post("/api/settings/font")
+    async def font_upload(file: UploadFile = File(...)):
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in (".ttf", ".otf", ".ttc"):
+            raise HTTPException(400, "expected .ttf, .otf or .ttc")
+        data = await file.read()
+        if len(data) > MAX_PAGE_BYTES:
+            raise HTTPException(400, "file too large")
+        try:
+            ImageFont.truetype(io.BytesIO(data), 12)
+        except Exception:
+            raise HTTPException(400, "not a valid font")
+        d = s.library_path / "fonts"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{hashlib.sha256(data).hexdigest()[:16]}{ext}"
+        f.write_bytes(data)
+        s.font_path = str(f)
+        drop_renders()
+        s.save()
         return settings_get()
 
     # ---------- progress ----------

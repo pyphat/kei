@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, KeyRound, Languages, LoaderCircle, Paintbrush, Settings2, Type } from "lucide-react";
+import { Check, Download, KeyRound, Languages, LoaderCircle, Paintbrush, Settings2, Type, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ export default function SettingsPage() {
   const [key, setKey] = useState("");
   const [models, setModels] = useState<{ id: string; name: string }[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
+  const fontInput = useRef<HTMLInputElement>(null);
 
   const save = useMutation({
     mutationFn: () => {
@@ -39,6 +40,22 @@ export default function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["status"] });
       toast.success("Settings saved");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const fontUpload = useMutation({
+    mutationFn: (file: File) => api.uploadFont(file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      toast.success("Font updated");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const fontReset = useMutation({
+    mutationFn: () => api.patchSettings({ font_path: "" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      toast.success("Font updated");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -165,13 +182,48 @@ export default function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><Type className="size-4 text-primary" />Typesetting</CardTitle>
-            <CardDescription>Set the minimum and maximum translation text size.</CardDescription>
+            <CardDescription>Font file and translation text size.</CardDescription>
           </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-3">
-            <NumberField label="Minimum font size" value={val("font_min")} min={6} max={96}
-                         onChange={(v) => change("font_min", v)} />
-            <NumberField label="Maximum font size" value={val("font_max")} min={6} max={96}
-                         onChange={(v) => change("font_max", v)} />
+          <CardContent className="space-y-4">
+            <div className="grid gap-2">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <Label>Font</Label>
+                  <p title={settings.font_path}
+                     className="truncate font-mono text-xs text-muted-foreground">
+                    {settings.font_path
+                      ? settings.font_path.split(/[\\/]/).pop()
+                      : "Default (Comic Sans / Arial)"}
+                  </p>
+                </div>
+                <input type="file" accept=".ttf,.otf,.ttc" ref={fontInput} className="hidden"
+                       aria-label="Font file" onChange={(e) => {
+                         const file = e.target.files?.[0];
+                         if (file) fontUpload.mutate(file);
+                         e.target.value = "";
+                       }} />
+                <Button size="sm" variant="outline" disabled={fontUpload.isPending}
+                        onClick={() => fontInput.current?.click()}>
+                  {fontUpload.isPending ? <LoaderCircle className="animate-spin" /> : <Upload />}
+                  Choose font file
+                </Button>
+                {settings.font_path && (
+                  <Button size="sm" variant="ghost" disabled={fontReset.isPending}
+                          onClick={() => fontReset.mutate()}>
+                    Use default
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Pick a font that covers your target language (e.g. Noto Sans JP for Japanese). Applies to pages as they are re-rendered — reload the reader to see it.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField label="Minimum font size" value={val("font_min")} min={6} max={96}
+                           onChange={(v) => change("font_min", v)} />
+              <NumberField label="Maximum font size" value={val("font_max")} min={6} max={96}
+                           onChange={(v) => change("font_max", v)} />
+            </div>
           </CardContent>
         </Card>
 

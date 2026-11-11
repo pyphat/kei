@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api_fastapi.app import create_app
-from kei_core.config import Settings
+from kei_core.config import Settings, _default_font
 from kei_core.ocr import PassthroughOCR
 from kei_core.translate import Translator
 
@@ -212,6 +212,9 @@ def test_translate_flow(client):
     r = c.patch(f"/api/chapters/{cid}/pages/0/blocks/{bid}",
                 json={"translation": "hello"})
     assert r.status_code == 200
+    hits = c.get(f"/api/chapters/{cid}/search", params={"q": "HELLO"}).json()
+    assert [(h["idx"], h["block_id"]) for h in hits] == [(0, bid)]
+    assert c.get(f"/api/chapters/{cid}/search", params={"q": "zzqqxx"}).json() == []
     r = c.get(f"/api/chapters/{cid}/pages/0/image?view=translated")
     assert r.headers["content-type"] == "image/png"
     im = Image.open(io.BytesIO(r.content))
@@ -319,6 +322,29 @@ def test_settings_validation(client):
     assert r.json()["mask_dilate"] == 7
     assert r.json()["mask_thresh"] == 0.5
     assert s.masker == "model" and s.mask_dilate == 7
+
+
+def test_font_upload(client):
+    c, s, tmp = client
+    r = c.post("/api/settings/font",
+               files={"file": ("x.exe", b"MZ", "application/octet-stream")})
+    assert r.status_code == 400
+    r = c.post("/api/settings/font",
+               files={"file": ("bad.ttf", b"not a font", "font/ttf")})
+    assert r.status_code == 400
+
+    src = Path(_default_font() or "")
+    if not src.is_file():
+        pytest.skip("no system font")
+    r = c.post("/api/settings/font",
+               files={"file": ("My Font.ttf", src.read_bytes(), "font/ttf")})
+    assert r.status_code == 200
+    fp = Path(r.json()["font_path"])
+    assert fp.is_file()
+    assert fp.parent == tmp / "lib" / "fonts"
+    assert fp.suffix == ".ttf"
+    assert s.font_path == str(fp)
+    assert c.patch("/api/settings", json={"font_path": ""}).json()["font_path"] == ""
 
 
 def test_reprocess_page(client):

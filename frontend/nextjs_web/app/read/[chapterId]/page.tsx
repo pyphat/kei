@@ -9,7 +9,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Languages, Maximize2,
-  Minimize2, Minus, MoreHorizontal, Plus, Pencil, RefreshCw,
+  Minimize2, Minus, MoreHorizontal, Plus, Pencil, RefreshCw, Search, Settings2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type PageStatus } from "@/lib/api";
@@ -19,12 +19,14 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+  DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 type View = "original" | "clean" | "translated";
@@ -37,23 +39,26 @@ const STATUS_VARIANT: Record<PageStatus, "default" | "secondary" | "outline" | "
 const REPROCESS_WARNING =
   "Re-cleans with current settings and re-translates (uses OpenRouter requests); edited translations are lost.";
 type ReaderMode = "single" | "continuous";
+type Prefs = { mode: ReaderMode; rtl: boolean; showPage: boolean; view: View };
+const DEFAULT_PREFS: Prefs = { mode: "single", rtl: true, showPage: false, view: "translated" };
 
-function readReaderMode(): ReaderMode {
-  return localStorage.getItem("kei_mode") === "continuous" ? "continuous" : "single";
+const readPrefsRaw = () => localStorage.getItem("kei_reader") ?? "";
+function parsePrefs(raw: string): Prefs {
+  try { return { ...DEFAULT_PREFS, ...JSON.parse(raw) }; } catch { return DEFAULT_PREFS; }
 }
 
-function subscribeReaderMode(onChange: () => void) {
+function subscribePrefs(onChange: () => void) {
   window.addEventListener("storage", onChange);
-  window.addEventListener("kei-mode-change", onChange);
+  window.addEventListener("kei-reader-change", onChange);
   return () => {
     window.removeEventListener("storage", onChange);
-    window.removeEventListener("kei-mode-change", onChange);
+    window.removeEventListener("kei-reader-change", onChange);
   };
 }
 
-function saveReaderMode(mode: ReaderMode) {
-  localStorage.setItem("kei_mode", mode);
-  window.dispatchEvent(new Event("kei-mode-change"));
+function savePrefs(patch: Partial<Prefs>) {
+  localStorage.setItem("kei_reader", JSON.stringify({ ...parsePrefs(readPrefsRaw()), ...patch }));
+  window.dispatchEvent(new Event("kei-reader-change"));
 }
 
 function Reader() {
@@ -75,16 +80,21 @@ function Reader() {
 
   const count = ch?.pages.length ?? 0;
   const [page, setPage] = useState<number | null>(null);
-  const mode = useSyncExternalStore(subscribeReaderMode, readReaderMode, () => "single");
-  const [rtl, setRtl] = useState(true);
-  const [view, setView] = useState<View>("translated");
+  const prefsRaw = useSyncExternalStore(subscribePrefs, readPrefsRaw, () => "");
+  const prefs = useMemo(() => parsePrefs(prefsRaw), [prefsRaw]);
+  const { mode, rtl } = prefs;
+  const [viewOverride, setView] = useState<View | null>(null);
+  const view = viewOverride ?? prefs.view;
   const [zoom, setZoom] = useState<Zoom>("fit-h");
   const [editing, setEditing] = useState(false);
   const [selBlock, setSelBlock] = useState<string | null>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [hoveringControls, setHoveringControls] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [openMenu, setOpenMenu] = useState<"more" | "settings" | "search" | null>(null);
+  const menuOpen = openMenu !== null;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [submitted, setSubmitted] = useState("");
   const [reprocessOpen, setReprocessOpen] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -192,6 +202,11 @@ function Reader() {
     queryFn: () => api.getBlocks(cid, ch!.pages[cur].idx),
     enabled: editing && !!ch && view !== "original",
   });
+  const { data: searchResults } = useQuery({
+    queryKey: ["search", cid, submitted],
+    queryFn: () => api.searchChapter(cid, submitted),
+    enabled: submitted.trim().length > 0,
+  });
 
   const nextChapter = useMemo(() => {
     if (!series || !ch) return null;
@@ -263,11 +278,22 @@ function Reader() {
             <p className="truncate text-sm font-semibold">{series?.title ?? "kei"}</p>
             <p className="truncate text-xs text-white/55">Chapter {ch.number}{ch.title ? ` · ${ch.title}` : ""}</p>
           </div>
+          <Button size="icon" variant="ghost" aria-label="Search text"
+                  className="text-white hover:bg-white/10 hover:text-white"
+                  onClick={() => setOpenMenu("search")}>
+            <Search />
+          </Button>
           <Badge variant={STATUS_VARIANT[pg?.status ?? "pending"]}
                  className="max-w-20 truncate px-1.5 text-[10px] capitalize sm:max-w-none sm:px-2">{pg?.status ?? "pending"}</Badge>
           <span className="min-w-14 text-right text-sm tabular-nums text-white/75">{cur + 1} / {count}</span>
         </div>
       </div>
+
+      {prefs.showPage && !controlsVisible && (
+        <span className="pointer-events-none absolute bottom-3 right-3 z-20 rounded-full bg-black/60 px-2.5 py-1 text-xs tabular-nums text-white/80">
+          {cur + 1} / {count}
+        </span>
+      )}
 
       {nextChapter && cur >= count - 1 && (
         <Link className="absolute bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-xl"
@@ -308,22 +334,6 @@ function Reader() {
               <ToggleGroupItem value="translated" aria-label="Translated" className="h-7 px-2 text-xs text-white data-[state=on]:bg-white/15 data-[state=on]:text-white">Translated</ToggleGroupItem>
             </ToggleGroup>
             <div className="flex flex-wrap items-center gap-2">
-              <ToggleGroup type="single" value={mode}
-                           onValueChange={(value) => {
-                             if (value === "single" || value === "continuous") {
-                               saveReaderMode(value);
-                             }
-                           }}
-                           aria-label="Reader mode" className="rounded-lg bg-white/5 p-0.5"
-                           variant="outline" size="sm" spacing={0}>
-                <ToggleGroupItem value="single" aria-label="Single" className="h-7 px-2 text-xs text-white data-[state=on]:bg-white/15 data-[state=on]:text-white">Single</ToggleGroupItem>
-                <ToggleGroupItem value="continuous" aria-label="Continuous" className="h-7 px-2 text-xs text-white data-[state=on]:bg-white/15 data-[state=on]:text-white">Continuous</ToggleGroupItem>
-              </ToggleGroup>
-              <div className="flex items-center gap-1.5 rounded-lg bg-white/5 px-2 py-1">
-                <span className="text-xs text-white/75">RTL</span>
-                <Switch aria-label="RTL" checked={rtl} onCheckedChange={setRtl}
-                        className="data-[state=checked]:bg-primary" />
-              </div>
               <div className="flex items-center gap-0.5 rounded-lg bg-white/5 p-0.5">
                 <Button size="icon" variant="ghost" aria-label="Fit height" className="size-7 text-white hover:bg-white/10 hover:text-white"
                         onClick={() => setZoom("fit-h")}><Minimize2 /></Button>
@@ -341,8 +351,65 @@ function Reader() {
                   <Plus />
                 </Button>
               </div>
-              <DropdownMenu open={menuOpen} onOpenChange={(open) => {
-                setMenuOpen(open);
+              <DropdownMenu open={openMenu === "settings"} onOpenChange={(open) => {
+                setOpenMenu(open ? "settings" : null);
+                if (open) revealControls();
+              }}>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" variant="ghost" aria-label="Reader settings"
+                          className="size-7 text-white hover:bg-white/10 hover:text-white">
+                    <Settings2 />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" side="top" className="min-w-56">
+                  <DropdownMenuLabel>Reading direction</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={rtl ? "rtl" : "ltr"}
+                                          onValueChange={(value) => savePrefs({ rtl: value === "rtl" })}>
+                    <DropdownMenuRadioItem value="rtl" onSelect={(e) => e.preventDefault()}>
+                      Right to left
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="ltr" onSelect={(e) => e.preventDefault()}>
+                      Left to right
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Layout</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={mode}
+                                          onValueChange={(value) => savePrefs({ mode: value as ReaderMode })}>
+                    <DropdownMenuRadioItem value="single" onSelect={(e) => e.preventDefault()}>
+                      Single
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="continuous" onSelect={(e) => e.preventDefault()}>
+                      Continuous
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Default view</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={prefs.view}
+                                          onValueChange={(value) => {
+                                            savePrefs({ view: value as View });
+                                            setView(null);
+                                          }}>
+                    <DropdownMenuRadioItem value="original" onSelect={(e) => e.preventDefault()}>
+                      Original
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="clean" onSelect={(e) => e.preventDefault()}>
+                      Clean
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="translated" onSelect={(e) => e.preventDefault()}>
+                      Translated
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem checked={prefs.showPage}
+                                            onSelect={(e) => e.preventDefault()}
+                                            onCheckedChange={(checked) => savePrefs({ showPage: checked === true })}>
+                    Always show page number
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu open={openMenu === "more"} onOpenChange={(open) => {
+                setOpenMenu(open ? "more" : null);
                 if (open) revealControls();
               }}>
                 <DropdownMenuTrigger asChild>
@@ -375,6 +442,45 @@ function Reader() {
           </div>
         </div>
       </div>
+
+      <Dialog open={openMenu === "search"} onOpenChange={(open) => setOpenMenu(open ? "search" : null)}>
+        <DialogContent className="gap-3 sm:max-w-lg">
+          <DialogTitle>Search text</DialogTitle>
+          <form className="flex gap-2" onSubmit={(e) => {
+            e.preventDefault();
+            setSubmitted(searchQuery);
+          }}>
+            <Input autoFocus aria-label="Search query" placeholder="Find text in this chapter…"
+                   value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+            <Button type="submit">Search</Button>
+          </form>
+          <p className="text-xs text-muted-foreground">Only processed pages are searchable.</p>
+          {searchResults?.length === 0 && (
+            <p className="text-sm text-muted-foreground">No matches</p>
+          )}
+          <div className="max-h-80 space-y-1 overflow-y-auto">
+            {searchResults?.map((hit) => {
+              const i = ch.pages.findIndex((p) => p.idx === hit.idx);
+              return (
+                <button key={`${hit.idx}-${hit.block_id}`} type="button"
+                        className="w-full rounded-md px-2 py-1.5 text-left hover:bg-accent"
+                        onClick={() => {
+                          go(i);
+                          setOpenMenu(null);
+                          if (mode === "continuous")
+                            document.querySelector(`[data-i="${i}"]`)?.scrollIntoView();
+                        }}>
+                  <span className="block text-xs text-muted-foreground">Page {i + 1}</span>
+                  <span className="line-clamp-2 block text-sm">{hit.translation || hit.source}</span>
+                  {hit.translation && (
+                    <span className="line-clamp-2 block text-xs text-muted-foreground">{hit.source}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={reprocessOpen} onOpenChange={setReprocessOpen}>
         <AlertDialogContent>

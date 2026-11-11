@@ -1,7 +1,42 @@
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
-from kei_core.typeset import _render_box, _sizes, _widen
+from kei_core.typeset import _render_box, _sizes, _widen, _wrap
+
+
+def test_wrap_breaks_cjk():
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    f = ImageFont.load_default(16)
+    text = "これは長い日本語の文章です" * 2
+    lines = _wrap(draw, text, f, 60)
+    assert len(lines) > 1
+    assert "".join(lines) == text
+
+
+def test_wrap_keeps_latin_words():
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    f = ImageFont.load_default(16)
+    lines = _wrap(draw, "hello wonderful world", f, 60)
+    assert " ".join(lines) == "hello wonderful world"
+    assert set(" ".join(lines).split()) == {"hello", "wonderful", "world"}
+    assert all(not line.startswith(" ") and not line.endswith(" ") for line in lines)
+
+
+def test_wrap_thai_breaks_at_words():
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    f = ImageFont.load_default(16)
+    text = "ภาษาไทยเป็นภาษาที่ไม่มีการเว้นวรรคระหว่างคำ"
+    from pythainlp.tokenize import word_tokenize
+    lines = _wrap(draw, text, f, 60)
+    assert len(lines) > 1
+    assert "".join(lines) == text
+    cuts, pos = set(), 0
+    for w in word_tokenize(text, engine="newmm"):
+        pos += len(w); cuts.add(pos)
+    pos = 0
+    for line in lines[:-1]:
+        pos += len(line); assert pos in cuts
 
 
 def test_render_box_uses_bubble():

@@ -14,6 +14,7 @@ dependencies = [
     "numpy",
     "manga-ocr",
     "httpx",
+    "pythainlp==5.4.0",
 ]
 
 [tool.setuptools.packages.find]

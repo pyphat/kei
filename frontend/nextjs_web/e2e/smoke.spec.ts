@@ -102,7 +102,10 @@ test("kei e2e smoke", async ({ page, browser, request }) => {
   await page.reload();
   await expect(page.getByText("2 / 3")).toBeVisible({ timeout: 10_000 });
   // 6. continuous mode shows 3 images
-  await page.getByRole("radio", { name: "Continuous" }).click();
+  await page.mouse.move(200, 80);
+  await page.getByRole("button", { name: "Reader settings" }).click();
+  await page.getByRole("menuitemradio", { name: "Continuous" }).click();
+  await page.keyboard.press("Escape");
   await expect(page.locator("main img")).toHaveCount(3);
   await page.screenshot({ path: `${SHOTS}/reader_continuous.png`, caret: "initial" });
 
