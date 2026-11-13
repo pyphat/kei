@@ -1,19 +1,28 @@
 import asyncio
 import hashlib
+import hmac
+import ipaddress
 import io
 import json
 import logging
 import os
+import secrets
 import shutil
+import socket
 import tempfile
+import time
 import zipfile
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+import segno
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from PIL import Image, ImageFont
+from zeroconf import ServiceInfo, Zeroconf
 
 from kei_core.config import Settings, setup_logging
 from kei_core.library import EXTS, Library, natkey, norm_ext
@@ -44,16 +53,192 @@ def _env_settings():
     return s
 
 
-def create_app(settings=None, translator=None, ocr=None):
+def _lan_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))
+            return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+# shortcut: resized renditions are recomputed per request, add a disk cache if phones feel slow
+def _jpeg_w(img, w) -> bytes:
+    width = max(64, min(4096, w))
+    resized = img.resize(
+        (width, max(1, round(img.height * width / img.width))),
+        Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    resized.convert("RGB").save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+def create_app(settings=None, translator=None, ocr=None, mdns=False):
     if not logging.getLogger().handlers:
         setup_logging()
     s = settings or _env_settings()
     lib = Library(s.library_path)
     runner = Runner(lib, s, translator=translator, ocr=ocr)
-    app = FastAPI(title="kei")
+    pair = {}
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        zc = info = None
+        if mdns:
+            try:
+                hostname = socket.gethostname()
+                # shortcut: KEI_PORT must match uvicorn's --port, pass it if you change the port
+                port = int(os.environ.get("KEI_PORT", "8000"))
+                info = ServiceInfo(
+                    "_kei._tcp.local.",
+                    f"kei on {hostname}._kei._tcp.local.",
+                    addresses=[socket.inet_aton(_lan_ip())],
+                    port=port,
+                    properties={"api": "1"})
+                zc = Zeroconf()
+                await run_in_threadpool(zc.register_service, info)
+            except Exception as e:
+                log.warning("mDNS registration failed: %r", e)
+                if zc:
+                    try:
+                        await run_in_threadpool(zc.close)
+                    except Exception as close_error:
+                        log.warning("mDNS close failed: %s", close_error)
+                    zc = None
+        try:
+            yield
+        finally:
+            if zc and info:
+                try:
+                    await run_in_threadpool(zc.unregister_service, info)
+                except Exception as e:
+                    log.warning("mDNS unregister failed: %s", e)
+                try:
+                    await run_in_threadpool(zc.close)
+                except Exception as e:
+                    log.warning("mDNS close failed: %s", e)
+
+    app = FastAPI(title="kei", lifespan=lifespan)
     app.state.runner = runner
     app.state.lib = lib
     app.state.settings = s
+
+    def is_local(request):
+        try:
+            return ipaddress.ip_address(request.client.host).is_loopback
+        except (AttributeError, ValueError):
+            return False
+
+    def token_device(request):
+        header = request.headers.get("authorization", "")
+        scheme, sep, token = header.partition(" ")
+        if not sep or scheme.lower() != "bearer" or not token:
+            return None
+        return lib.device_by_token(hashlib.sha256(token.encode()).hexdigest())
+
+    def mark_device(request, device):
+        request.state.device_id = device["id"]
+        now = time.time()
+        if now - device["last_seen"] > 60:
+            lib.touch_device(device["id"], now)
+
+    @app.middleware("http")
+    async def require_device(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/"):
+            return await call_next(request)
+        request.state.device_id = None
+        if is_local(request):
+            return await call_next(request)
+        if ((request.method == "GET" and path == "/api/server")
+                or (request.method == "POST" and path == "/api/devices/pair")
+                or (request.method == "GET" and path == "/api/devices/pair-code")):
+            return await call_next(request)
+        device = token_device(request)
+        if not device:
+            return JSONResponse({"detail": "pairing required"}, status_code=401)
+        mark_device(request, device)
+        return await call_next(request)
+
+    @app.get("/api/server")
+    def server_info(request: Request):
+        auth = "local" if is_local(request) else "required"
+        if auth != "local":
+            device = token_device(request)
+            if device:
+                mark_device(request, device)
+                auth = "ok"
+        return {"name": "kei", "hostname": socket.gethostname(),
+                "version": "0.1.0", "api": 1, "auth": auth}
+
+    @app.get("/api/devices/pair-code")
+    def pair_code(request: Request):
+        if not is_local(request):
+            raise HTTPException(403, "pairing code is local only")
+        now = time.time()
+        pin = f"{secrets.randbelow(1_000_000):06d}"
+        secret = secrets.token_urlsafe(16)
+        pair.update(pin=pin, secret=secret, expires=now + 300, fails=0)
+        lan_ip = _lan_ip()
+        base = f"http://{lan_ip}:{request.url.port or 8000}"
+        payload = f"kei://pair?u={quote(base)}&s={secret}"
+        return {"pin": pin, "expires": pair["expires"], "url": base,
+                "qr": payload,
+                "qr_svg": segno.make(payload, error="m").svg_inline(
+                    scale=6, border=2, dark="#000", light="#fff")}
+
+    @app.post("/api/devices/pair")
+    def pair_device(body: dict = Body(...)):
+        now = time.time()
+        pin, secret = body.get("pin"), body.get("secret")
+        valid = bool(pair and now < pair["expires"]) and (
+            isinstance(pin, str) and pin.isascii()
+            and hmac.compare_digest(pin, pair["pin"])
+            or isinstance(secret, str)
+            and secret.isascii()
+            and hmac.compare_digest(secret, pair["secret"]))
+        if not valid:
+            if pair:
+                pair["fails"] += 1
+                if pair["fails"] >= 5:
+                    pair.clear()
+            raise HTTPException(403, "invalid or expired code")
+        pair.clear()
+        name = body.get("name")
+        name = name.strip()[:60] if isinstance(name, str) else ""
+        name = name or "Android device"
+        token = secrets.token_urlsafe(32)
+        device_id = lib.add_device(
+            name, hashlib.sha256(token.encode()).hexdigest())
+        publish({"type": "devices"})
+        return {"device_id": device_id, "token": token, "name": name}
+
+    @app.get("/api/devices")
+    def devices_list(request: Request):
+        return [{"id": d["id"], "name": d["name"], "created": d["created"],
+                 "last_seen": d["last_seen"],
+                 "current": d["id"] == request.state.device_id}
+                for d in lib.list_devices()]
+
+    @app.patch("/api/devices/{device_id}")
+    def device_rename(device_id: int, body: dict = Body(...)):
+        if not lib.get_device(device_id):
+            raise HTTPException(404, "device not found")
+        name = body.get("name")
+        if not isinstance(name, str):
+            raise HTTPException(422, "name must be a string")
+        name = name.strip()[:60] or "Android device"
+        lib.rename_device(device_id, name)
+        publish({"type": "devices"})
+        return {"id": device_id, "name": name}
+
+    @app.delete("/api/devices/{device_id}")
+    def device_delete(device_id: int):
+        if not lib.get_device(device_id):
+            raise HTTPException(404, "device not found")
+        lib.delete_device(device_id)
+        publish({"type": "devices"})
+        return {"ok": True}
 
     def series_json(row):
         pr = lib.get_progress(row["id"])
@@ -140,11 +325,17 @@ def create_app(settings=None, translator=None, ocr=None):
         return {"ok": True}
 
     @app.get("/api/series/{sid}/cover")
-    def cover_get(sid: int):
+    def cover_get(sid: int, w: int | None = None):
         get_series_or_404(sid)
         f = lib.cover_file(sid)
         if not f.exists():
             raise HTTPException(404, "no cover")
+        if w is not None:
+            w = max(64, min(4096, w))
+            with Image.open(f) as img:
+                if w < img.width:
+                    return Response(_jpeg_w(img, w), media_type="image/jpeg",
+                                    headers=_IMMUTABLE)
         return FileResponse(f, media_type="image/jpeg", headers=_IMMUTABLE)
 
     @app.post("/api/series/{sid}/cover")
@@ -337,22 +528,40 @@ def create_app(settings=None, translator=None, ocr=None):
     # ---------- pages ----------
 
     @app.get("/api/chapters/{cid}/pages/{idx}/image")
-    def page_image(cid: int, idx: int, view: str = "original"):
+    def page_image(cid: int, idx: int, view: str = "original",
+                   w: int | None = None):
         get_chapter_or_404(cid)
         p = lib.get_page(cid, idx)
         if not p or not p["present"]:
             raise HTTPException(404, "page not found")
         f = lib.page_file(cid, idx)
+        if w is not None:
+            w = max(64, min(4096, w))
         if view == "original":
+            if w is not None:
+                with Image.open(f) as img:
+                    if w < img.width:
+                        return Response(_jpeg_w(img, w), media_type="image/jpeg",
+                                        headers=_IMMUTABLE)
             return FileResponse(f, headers=_IMMUTABLE)
         svc = runner.get_service(cid)
         pos = runner.svc_pos(cid, idx)
         if svc is None or pos is None or not svc._is_processed(pos):
             # no-store: this URL must not stay cached once the page is processed
+            if w is not None:
+                with Image.open(f) as img:
+                    if w < img.width:
+                        r = Response(_jpeg_w(img, w), media_type="image/jpeg",
+                                     headers={"Cache-Control": "no-store"})
+                        r.headers["X-Kei-Status"] = "pending"
+                        return r
             r = FileResponse(f, headers={"Cache-Control": "no-store"})
             r.headers["X-Kei-Status"] = "pending"
             return r
         img = svc.get_page(pos, view)
+        if w is not None and w < img.width:
+            return Response(_jpeg_w(img, w), media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache"})
         buf = io.BytesIO()
         img.save(buf, "PNG")
         return Response(buf.getvalue(), media_type="image/png",
@@ -402,6 +611,27 @@ def create_app(settings=None, translator=None, ocr=None):
                  "status": runner.page_status(cid, idx)})
         return {"ok": True}
 
+    @app.post("/api/chapters/{cid}/pages/{idx}/blocks/{bid}/retranslate")
+    def block_retranslate(cid: int, idx: int, bid: str):
+        get_chapter_or_404(cid)
+        svc = runner.get_service(cid)
+        pos = runner.svc_pos(cid, idx)
+        if svc is None or pos is None or not svc._is_processed(pos):
+            raise HTTPException(404, "page not processed")
+        block = next((b for b in svc.get_blocks(pos) if b.id == bid), None)
+        if block is None or not block.source.strip():
+            raise HTTPException(404, "block not found")
+        try:
+            text = runner.translator.translate({bid: block.source}).get(bid)
+            if not text or not str(text).strip():
+                raise ValueError("empty translation")
+        except Exception as e:
+            raise HTTPException(502, str(e))
+        runner.call(lambda: svc.update_translation(pos, bid, text))
+        publish({"type": "page", "chapter_id": cid, "page": idx,
+                 "status": runner.page_status(cid, idx)})
+        return {"translation": text}
+
     @app.post("/api/chapters/{cid}/pages/{idx}/reprocess")
     def page_reprocess(cid: int, idx: int):
         get_chapter_or_404(cid)
@@ -430,6 +660,42 @@ def create_app(settings=None, translator=None, ocr=None):
             raise HTTPException(400, "action must be start|pause|resume")
         return {"state": runner.chapter_state(cid)}
 
+    @app.get("/api/jobs")
+    def jobs_list():
+        items = []
+        for cid in list(runner.state):
+            ch = lib.get_chapter(cid)
+            if not ch:
+                continue
+            ser = lib.get_series(ch["series_id"])
+            items.append({
+                "chapter_id": cid, "series_id": ch["series_id"],
+                "series_title": ser["title"], "chapter_number": ch["number"],
+                "chapter_title": ch["title"], **runner.chapter_stats(cid),
+                "failed": [{"page": idx, "error": msg}
+                           for (c, idx), msg in list(runner.failed.items())
+                           if c == cid],
+                "current": ({"page": runner._processing[1],
+                             "stage": runner.stage}
+                            if runner._processing
+                            and runner._processing[0] == cid else None),
+            })
+        return sorted(items, key=lambda item: (
+            item["state"] != "running", item["chapter_id"]))
+
+    @app.post("/api/jobs/{cid}/{action}")
+    def job_action(cid: int, action: str):
+        if action not in ("pause", "resume", "cancel"):
+            raise HTTPException(400, "action must be pause|resume|cancel")
+        get_chapter_or_404(cid)
+        if action == "pause":
+            runner.pause(cid)
+        elif action == "resume":
+            runner.start(cid)
+        else:
+            runner.cancel(cid)
+        return {"state": runner.chapter_state(cid)}
+
     @app.post("/api/chapters/{cid}/focus")
     def chapter_focus(cid: int, body: dict = Body(...)):
         get_chapter_or_404(cid)
@@ -443,6 +709,18 @@ def create_app(settings=None, translator=None, ocr=None):
                 "requests_today": fn() if fn else 0,
                 "has_key": bool(s.openrouter_key),
                 "inpainter": s.inpainter, "target_lang": s.target_lang}
+
+    @app.get("/api/usage")
+    def usage():
+        t = runner.translator
+        requests_today = getattr(t, "requests_today", None)
+        daily_limit = getattr(t, "free_daily_limit", None)
+        return {
+            "requests_today": requests_today() if callable(requests_today) else 0,
+            "daily_limit": daily_limit() if callable(daily_limit) else None,
+            "model": getattr(t, "last_model", None)
+            or (s.model_priority[0] if s.model_priority else None),
+        }
 
     @app.get("/api/models")
     def models():
@@ -505,6 +783,8 @@ def create_app(settings=None, translator=None, ocr=None):
         s.save()
         if hasattr(runner.translator, "_free"):
             runner.translator._free = None
+        if "api_key" in coerced and hasattr(runner.translator, "_daily_limit_at"):
+            runner.translator._daily_limit_at = None
         return settings_get()
 
     @app.post("/api/settings/font")
@@ -577,4 +857,4 @@ def create_app(settings=None, translator=None, ocr=None):
     return app
 
 
-app = create_app()
+app = create_app(mdns=True)

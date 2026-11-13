@@ -5,6 +5,7 @@ import time
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -12,7 +13,7 @@ from PIL import Image
 from api_fastapi.app import create_app
 from kei_core.config import Settings, _default_font
 from kei_core.ocr import PassthroughOCR
-from kei_core.translate import Translator
+from kei_core.translate import OpenRouterTranslator, Translator
 
 PAGES = Path(__file__).resolve().parents[2] / "test"
 
@@ -30,8 +31,12 @@ def client(tmp_path):
                  api_key="test-key")
     s.save = lambda *a, **k: None  # never touch the user's real config
     app = create_app(s, translator=FakeTranslator(), ocr=PassthroughOCR("jp"))
-    with TestClient(app) as c:
+    with TestClient(app, client=("127.0.0.1", 50000)) as c:
         yield c, s, tmp_path
+
+
+def remote_client(c):
+    return TestClient(c.app, client=("192.168.1.50", 50000))
 
 
 def put_chapter(c, title="Series", number=1.0,
@@ -364,3 +369,122 @@ def test_reprocess_page(client):
     assert d["pages"][0]["status"] == "translated"
     assert c.post(f"/api/chapters/{cid}/pages/9/reprocess").status_code == 404
     assert c.post(f"/api/chapters/999/reprocess").status_code == 404
+
+
+def test_remote_requires_pairing(client):
+    c, _, _ = client
+    assert c.get("/api/server").json()["auth"] == "local"
+    with remote_client(c) as remote:
+        assert remote.get("/api/series").status_code == 401
+        r = remote.get("/api/server")
+        assert r.status_code == 200 and r.json()["auth"] == "required"
+        assert remote.get("/api/devices/pair-code").status_code == 403
+
+
+def test_pair_with_pin_and_secret(client):
+    c, _, _ = client
+    with remote_client(c) as remote:
+        code = c.get("/api/devices/pair-code").json()
+        for _ in range(5):
+            r = remote.post("/api/devices/pair",
+                            json={"name": "First", "pin": "wrong"})
+            assert r.status_code == 403
+        assert remote.post("/api/devices/pair",
+                           json={"name": "First", "pin": code["pin"]}).status_code == 403
+
+        code = c.get("/api/devices/pair-code").json()
+        r = remote.post("/api/devices/pair",
+                        json={"name": "First", "pin": code["pin"]})
+        assert r.status_code == 200
+        first = r.json()
+        headers1 = {"Authorization": f"Bearer {first['token']}"}
+        assert remote.get("/api/series", headers=headers1).status_code == 200
+        assert remote.get("/api/server", headers=headers1).json()["auth"] == "ok"
+        assert remote.post("/api/devices/pair",
+                           json={"name": "First", "pin": code["pin"]}).status_code == 403
+
+        code = c.get("/api/devices/pair-code").json()
+        secret = code["qr"].split("&s=")[1]
+        r = remote.post("/api/devices/pair",
+                        json={"name": "Second", "secret": secret})
+        assert r.status_code == 200
+        second = r.json()
+        headers2 = {"Authorization": f"Bearer {second['token']}"}
+        devices = remote.get("/api/devices", headers=headers2).json()
+        assert len(devices) == 2
+        assert sum(d["current"] for d in devices) == 1
+        assert c.patch(f"/api/devices/{first['device_id']}",
+                       json={"name": "Renamed"}).json()["name"] == "Renamed"
+        assert remote.delete(f"/api/devices/{first['device_id']}",
+                             headers=headers2).status_code == 200
+        assert remote.get("/api/series", headers=headers1).status_code == 401
+
+
+def test_image_resize(client):
+    c, _, _ = client
+    _, cid = put_chapter(c, images=("010.jpg",))
+    original = c.app.state.lib.page_file(cid, 0).read_bytes()
+    r = c.get(f"/api/chapters/{cid}/pages/0/image?view=original&w=100")
+    assert r.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(r.content)).width == 100
+    assert c.get(f"/api/chapters/{cid}/pages/0/image").content == original
+    assert c.get(f"/api/chapters/{cid}/pages/0/image?w=99999").content == original
+
+
+def test_jobs_and_cancel(client):
+    c, _, _ = client
+    _, cid = put_chapter(c, images=("010.jpg",))
+    assert c.post(f"/api/chapters/{cid}/translate",
+                  json={"action": "start"}).json()["state"] == "running"
+    assert any(j["chapter_id"] == cid and j["state"] == "running"
+               for j in c.get("/api/jobs").json())
+    assert c.post(f"/api/jobs/{cid}/pause").json()["state"] == "paused"
+    assert c.post(f"/api/jobs/{cid}/cancel").json()["state"] == "idle"
+    assert all(j["chapter_id"] != cid for j in c.get("/api/jobs").json())
+
+
+def test_usage(client):
+    c, _, _ = client
+    r = c.get("/api/usage")
+    assert r.status_code == 200
+    assert {"requests_today", "daily_limit", "model"} <= r.json().keys()
+    assert r.json()["requests_today"] == 0
+    assert r.json()["daily_limit"] is None
+
+
+def test_free_daily_limit_is_cached():
+    settings = Settings(api_key="test-key")
+    for is_free, expected in ((True, 50), (False, 1000)):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(200, json={"data": {"is_free_tier": is_free}})
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            translator = OpenRouterTranslator(settings, http)
+            assert translator.free_daily_limit() == expected
+            assert translator.free_daily_limit() == expected
+        assert len(calls) == 1
+
+
+def test_retranslate_block(client):
+    c, _, _ = client
+    _, cid = put_chapter(c, images=("010.jpg",))
+    c.post(f"/api/chapters/{cid}/translate", json={"action": "start"})
+    deadline = time.time() + 240
+    while time.time() < deadline:
+        if c.get(f"/api/chapters/{cid}").json()["pages"][0]["status"] == "translated":
+            break
+        time.sleep(1)
+    else:
+        pytest.fail("chapter not translated in time")
+    block = c.get(f"/api/chapters/{cid}/pages/0/blocks").json()["blocks"][0]
+    c.patch(f"/api/chapters/{cid}/pages/0/blocks/{block['id']}",
+            json={"translation": "x"})
+    r = c.post(
+        f"/api/chapters/{cid}/pages/0/blocks/{block['id']}/retranslate")
+    assert r.status_code == 200
+    assert r.json()["translation"] == f"EN: {block['id']}"
+    assert c.get(f"/api/chapters/{cid}/pages/0/blocks").json()["blocks"][0][
+        "translation"] == f"EN: {block['id']}"

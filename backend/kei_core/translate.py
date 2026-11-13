@@ -46,6 +46,10 @@ class OpenRouterTranslator(Translator):
         self.client = client or httpx.Client(timeout=60)
         self._free = None
         self._lock = threading.Lock()
+        self._limit_lock = threading.Lock()
+        self._daily_limit = None
+        self._daily_limit_at = None
+        self.last_model = None
 
     # --- model list / usage counter ---
 
@@ -91,6 +95,28 @@ class OpenRouterTranslator(Translator):
             return json.loads(self._usage_file().read_text()).get(date.today().isoformat(), 0)
         except Exception:
             return 0
+
+    # shortcut: OpenRouter's documented free-model caps (50/day, 1000/day with credits), update if they change
+    def free_daily_limit(self):
+        if not self.s.openrouter_key:
+            return None
+        now = time.monotonic()
+        with self._limit_lock:
+            if self._daily_limit_at is not None and now - self._daily_limit_at < 3600:
+                return self._daily_limit
+            try:
+                r = self.client.get(
+                    "https://openrouter.ai/api/v1/key",
+                    headers={"Authorization": f"Bearer {self.s.openrouter_key}"})
+                r.raise_for_status()
+                is_free = r.json()["data"]["is_free_tier"]
+                if not isinstance(is_free, bool):
+                    raise ValueError("invalid is_free_tier value")
+                self._daily_limit = 50 if is_free else 1000
+            except Exception:
+                self._daily_limit = None
+            self._daily_limit_at = now
+            return self._daily_limit
 
     # --- chat ---
 
@@ -175,6 +201,7 @@ class OpenRouterTranslator(Translator):
                     parsed.update(again)
             log.info("model %s succeeded", model)
             log.info("requests today: %d", self.requests_today())
+            self.last_model = model
             return {k: str(v) for k, v in parsed.items() if k in items}
         log.info("all models failed (%s)", last)
         raise RuntimeError(f"All free models failed ({last})")

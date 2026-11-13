@@ -1,16 +1,21 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, KeyRound, Languages, LoaderCircle, Paintbrush, Settings2, Type, Upload } from "lucide-react";
+import { Check, Download, KeyRound, Languages, LoaderCircle, Paintbrush, Settings2, Smartphone, Type, Upload } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, type PairCode } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
+  AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export default function SettingsPage() {
   const qc = useQueryClient();
@@ -20,6 +25,22 @@ export default function SettingsPage() {
   const [models, setModels] = useState<{ id: string; name: string }[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const fontInput = useRef<HTMLInputElement>(null);
+  const [pairCode, setPairCode] = useState<PairCode | null>(null);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [editingDevice, setEditingDevice] = useState<number | null>(null);
+  const [deviceName, setDeviceName] = useState("");
+  const [removingDevice, setRemovingDevice] = useState<number | null>(null);
+  const devices = useQuery({
+    queryKey: ["devices"], queryFn: api.listDevices, refetchInterval: 10000,
+  });
+
+  useEffect(() => {
+    if (!pairCode) return;
+    const update = () => setRemaining(Math.max(0, Math.ceil(pairCode.expires - Date.now() / 1000)));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [pairCode]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -56,6 +77,29 @@ export default function SettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       toast.success("Font updated");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const pairPhone = useMutation({
+    mutationFn: api.pairCode,
+    onSuccess: setPairCode,
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const renamePhone = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => api.renameDevice(id, name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["devices"] });
+      setEditingDevice(null);
+      toast.success("Device renamed");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const removePhone = useMutation({
+    mutationFn: api.deleteDevice,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["devices"] });
+      setRemovingDevice(null);
+      toast.success("Device removed");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -254,6 +298,85 @@ export default function SettingsPage() {
             </p>
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Smartphone className="size-4 text-primary" />Devices</CardTitle>
+            <CardDescription>Pair and manage phones that can access this server.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {(!pairCode || remaining === 0) && (
+              <Button size="sm" variant="outline" disabled={pairPhone.isPending}
+                      onClick={() => pairPhone.mutate()}>
+                {pairPhone.isPending ? <LoaderCircle className="animate-spin" /> : <Smartphone />}
+                {pairCode ? "New code" : "Pair a phone"}
+              </Button>
+            )}
+            {pairCode && remaining !== 0 && (
+              <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
+                <div className="size-48 rounded-lg bg-white p-2 text-black [&_svg]:size-full"
+                     dangerouslySetInnerHTML={{ __html: pairCode.qr_svg }} />
+                <div className="min-w-0 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">PIN</p>
+                  <p className="font-mono text-3xl tracking-[0.35em]">{pairCode.pin}</p>
+                  <p className="text-sm">Expires in {Math.floor((remaining ?? 300) / 60)}:{String((remaining ?? 300) % 60).padStart(2, "0")}</p>
+                  <p className="truncate text-xs text-muted-foreground" title={pairCode.url}>{pairCode.url}</p>
+                </div>
+              </div>
+            )}
+            {pairCode && remaining === 0 && (
+              <p className="text-sm text-muted-foreground">Pairing code expired.</p>
+            )}
+            <div className="space-y-3">
+              {devices.data?.length === 0 && (
+                <p className="text-sm text-muted-foreground">No phones paired yet.</p>
+              )}
+              {devices.data?.map((device) => (
+                <div key={device.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                  {editingDevice === device.id ? (
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <Input aria-label={`Name for ${device.name}`} value={deviceName}
+                             onChange={(e) => setDeviceName(e.target.value)} />
+                      <Button size="sm" disabled={renamePhone.isPending}
+                              onClick={() => renamePhone.mutate({ id: device.id, name: deviceName })}>
+                        Save
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{device.name}{device.current ? " (this device)" : ""}</p>
+                        <p className="text-xs text-muted-foreground">Last seen {relativeTime(device.last_seen)}</p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => {
+                          setEditingDevice(device.id);
+                          setDeviceName(device.name);
+                        }}>Rename</Button>
+                        <AlertDialog open={removingDevice === device.id}
+                                     onOpenChange={(open) => setRemovingDevice(open ? device.id : null)}>
+                          <AlertDialogTrigger asChild>
+                            <Button size="sm" variant="ghost">Remove</Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Remove {device.name}?</AlertDialogTitle>
+                              <AlertDialogDescription>It will need to pair again.</AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction disabled={removePhone.isPending}
+                                onClick={() => removePhone.mutate(device.id)}>Remove</AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
         </div>
       </div>
 
@@ -268,6 +391,16 @@ export default function SettingsPage() {
       </div>
     </div>
   );
+}
+
+function relativeTime(ts: number) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function Field({ label, htmlFor, children }: {

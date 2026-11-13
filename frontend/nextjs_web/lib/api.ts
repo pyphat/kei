@@ -48,6 +48,22 @@ export interface Blocks {
 
 export interface SearchHit { idx: number; block_id: string; source: string; translation: string }
 
+export interface PairCode {
+  pin: string;
+  expires: number;
+  url: string;
+  qr: string;
+  qr_svg: string;
+}
+
+export interface Device {
+  id: number;
+  name: string;
+  created: number;
+  last_seen: number;
+  current: boolean;
+}
+
 export interface Status {
   device: string;
   requests_today: number;
@@ -140,6 +156,13 @@ export const api = {
     if (!r.ok) throw new ApiError(r.status, (await r.json()).detail ?? "font upload failed");
     return r.json() as Promise<SettingsDict>;
   },
+  pairCode: () => req<PairCode>("/api/devices/pair-code"),
+  listDevices: () => req<Device[]>("/api/devices"),
+  renameDevice: (id: number, name: string) =>
+    req<{ id: number; name: string }>(`/api/devices/${id}`,
+      { ...json({ name }), method: "PATCH" }),
+  deleteDevice: (id: number) =>
+    req<{ ok: boolean }>(`/api/devices/${id}`, { method: "DELETE" }),
   coverFromPage: (sid: number, chapter_id: number, page: number) =>
     req<{ cover_url: string }>(`/api/series/${sid}/cover/from-page`,
       json({ chapter_id, page })),

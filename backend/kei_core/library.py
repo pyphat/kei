@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS page(
 CREATE TABLE IF NOT EXISTS progress(
     series_id INTEGER PRIMARY KEY REFERENCES series(id) ON DELETE CASCADE,
     chapter_id INT, page INT, percent REAL, device_id TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS device(
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, token_sha TEXT NOT NULL UNIQUE,
+    created REAL NOT NULL, last_seen REAL NOT NULL);
 """
 
 
@@ -270,3 +273,28 @@ class Library:
             FROM progress p JOIN series s ON s.id=p.series_id
             LEFT JOIN chapter c ON c.id=p.chapter_id
             ORDER BY p.ts DESC LIMIT ?""", (limit,))
+
+    def add_device(self, name, token_sha):
+        now = time.time()
+        cur = self._x(
+            "INSERT INTO device(name,token_sha,created,last_seen) VALUES(?,?,?,?)",
+            (name, token_sha, now, now))
+        return cur.lastrowid
+
+    def device_by_token(self, token_sha):
+        return self._one("SELECT * FROM device WHERE token_sha=?", (token_sha,))
+
+    def touch_device(self, device_id, ts):
+        self._x("UPDATE device SET last_seen=? WHERE id=?", (ts, device_id))
+
+    def list_devices(self):
+        return self._q("SELECT * FROM device ORDER BY id")
+
+    def rename_device(self, device_id, name):
+        self._x("UPDATE device SET name=? WHERE id=?", (name, device_id))
+
+    def delete_device(self, device_id):
+        self._x("DELETE FROM device WHERE id=?", (device_id,))
+
+    def get_device(self, device_id):
+        return self._one("SELECT * FROM device WHERE id=?", (device_id,))

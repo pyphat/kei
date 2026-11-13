@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Kei" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#3F51B5</item>
+    </style>
+    <color name="launcher_background">#1A237E</color>
+</resources>

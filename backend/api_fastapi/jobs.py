@@ -28,6 +28,7 @@ class Runner:
         self._prio = collections.deque()  # (cid, idx) focus pages, go first
         self._queued = set()          # (cid, idx) awaiting processing
         self._processing = None       # (cid, idx) currently in process_page
+        self.stage = None
         self.state = {}               # cid -> "running" | "paused"
         self._focused = set()         # cids the translator may serve
         self.focus_page = {}
@@ -93,6 +94,12 @@ class Runner:
             self._queued.discard((cid, idx))
         self._pending[cid] = collections.deque()
         publish({"type": "chapter", "chapter_id": cid, "state": "paused"})
+
+    def cancel(self, cid):
+        self.pause(cid)
+        self.state.pop(cid, None)
+        self._focused.discard(cid)
+        publish({"type": "chapter", "chapter_id": cid, "state": "idle"})
 
     def focus(self, cid, page):
         """Prefetch page..page+5 of this chapter, even if it's idle."""
@@ -234,6 +241,7 @@ class Runner:
 
         def prog(stage):
             stages.append(stage)
+            self.stage = stage
             publish({"type": "page", "chapter_id": cid, "page": idx,
                      "status": "processing", "stage": stage})
 
@@ -252,6 +260,7 @@ class Runner:
                      "message": f"chapter {cid} page {idx}: {e}"})
         finally:
             self._processing = None
+            self.stage = None
 
     # --- translator loop ---
 
